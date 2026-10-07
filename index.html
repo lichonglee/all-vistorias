@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#334F7D">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ALL Vistorias">
+<title>ALL Vistorias</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <button id="back" class="icon" aria-label="Voltar" hidden>‹</button>
+  <img class="logo" src="assets/logo.png" alt="ALL Engenharia Estrutural">
+  <h1 id="title">Obras</h1>
+</header>
+<main id="view"></main>
+<nav class="tabbar">
+  <a href="#/" data-nav="obras"><i>▤</i>Obras</a>
+  <a href="#/painel" data-nav="painel"><i>◧</i>Painel</a>
+  <a href="#/ajustes" data-nav="ajustes"><i>⚙</i>Ajustes</a>
+</nav>
+<div id="modal" class="modal" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="camIn" accept="image/*" capture="environment" hidden>
+<input type="file" id="galIn" accept="image/*" multiple hidden>
+<input type="file" id="impIn" accept="application/json,.json" hidden>
+<script src="vendor/docx.iife.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="db.js"></script>
+<script src="report.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

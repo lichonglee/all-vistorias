@@ -1,0 +1,413 @@
+/* ALL Vistorias — aplicativo de campo + painel administrativo. Sem servidor: tudo roda e fica salvo no aparelho. */
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pad = (n, l = 2) => String(n).padStart(l, '0');
+const hoje = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const agora = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const slug = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'x';
+const TIPOS = ['Vistoria técnica de rotina', 'Vistoria de patologias / manifestações', 'Acompanhamento de execução', 'Recebimento de serviço', 'Vistoria cautelar / pré-obra', 'Pós-ocorrência', 'Outra'];
+const CLIMAS = ['Ensolarado', 'Nublado', 'Chuvoso', 'Chuva recente', 'Iluminação artificial'];
+const GRAVS = ['Informativa', 'Baixa', 'Média', 'Alta', 'Crítica'];
+const gravCls = g => ({ Informativa: 'mut', Baixa: 'ok', 'Média': 'warn', Alta: 'warn', 'Crítica': 'bad' }[g] || 'mut');
+const METOD = 'Inspeção visual realizada in loco, com registro fotográfico georreferenciado e datado, sem ensaios destrutivos.';
+const DEFAULTS = {
+  empresa: { nome: 'ALL Engenharia Estrutural', cnpj: '32.719.612/0001-25', endereco: 'CLN 206, Bloco A, Loja 03 – Asa Norte, Brasília-DF – CEP 70844-510', fone: '(61) 4515-1515', email: '' },
+  rt: { nome: 'Li Chong Lee Bacelar de Castro', titulo: '', crea: '' },
+  usuario: '', carimbo: true, maxpx: 1600, pinHash: ''
+};
+let S = null, logo = null, token = 0, tab = 'dados';
+const urls = {};
+const urlOf = f => urls[f.id] || (urls[f.id] = URL.createObjectURL(f.blob));
+const byTs = (a, b) => a.ts - b.ts;
+
+/* ---------- utilidades de interface ---------- */
+function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, ms); }
+function modal(html, onclose) {
+  const m = $('#modal'); m.innerHTML = `<div class="sheet">${html}</div>`; m.hidden = false;
+  m.onclick = e => { if (e.target === m) closeModal(); }; m._close = onclose; return m.firstChild;
+}
+function closeModal() { const m = $('#modal'); m.hidden = true; m.innerHTML = ''; if (m._close) m._close(); m._close = null; }
+const confirmar = msg => Promise.resolve(window.confirm(msg));
+function setTitle(t, back) { $('#title').textContent = t; const b = $('#back'); b.hidden = !back; b.onclick = () => { location.hash = back; }; }
+function setNav(n) { document.querySelectorAll('.tabbar a').forEach(a => a.classList.toggle('on', a.dataset.nav === n)); }
+function setPath(o, path, v) { const k = path.split('.'); while (k.length > 1) o = o[k.shift()]; o[k[0]] = v; }
+function bindFields(root, obj, save) {
+  root.querySelectorAll('[data-f]').forEach(el => {
+    let tm; const read = () => el.type === 'checkbox' ? el.checked : el.value;
+    el.addEventListener('input', () => { setPath(obj, el.dataset.f, read()); clearTimeout(tm); tm = setTimeout(() => save && save(el.dataset.f, read()), 300); });
+    el.addEventListener('change', () => { clearTimeout(tm); setPath(obj, el.dataset.f, read()); save && save(el.dataset.f, read()); });
+  });
+}
+async function patchV(id, path, value) { const x = await DB.get('vistorias', id); if (!x) return; setPath(x, path, value); x.updatedAt = Date.now(); await DB.put('vistorias', x); }
+const val = (o, path) => path.split('.').reduce((a, k) => a?.[k], o);
+const fld = (label, path, obj, o = {}) => {
+  const v = val(obj, path) ?? '';
+  const a = `data-f="${path}"` + (o.ph ? ` placeholder="${esc(o.ph)}"` : '') + (o.list ? ` list="${o.list}"` : '');
+  if (o.area) return `<div><label>${label}</label><textarea ${a} rows="${o.rows || 3}">${esc(v)}</textarea></div>`;
+  return `<div><label>${label}</label><input ${a} type="${o.type || 'text'}" value="${esc(v)}"></div>`;
+};
+const datalist = (id, arr) => `<datalist id="${id}">${arr.map(x => `<option value="${esc(x)}">`).join('')}</datalist>`;
+
+/* ---------- dados ---------- */
+async function loadSettings() {
+  const c = await DB.getSetting('cfg', {});
+  S = { ...DEFAULTS, ...c, empresa: { ...DEFAULTS.empresa, ...(c.empresa || {}) }, rt: { ...DEFAULTS.rt, ...(c.rt || {}) } };
+}
+const saveSettings = () => DB.setSetting('cfg', S);
+async function loadLogo() {
+  const r = await fetch('assets/logo.png'); const bytes = new Uint8Array(await r.arrayBuffer());
+  const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' })); logo = { bytes, w: bmp.width, h: bmp.height };
+}
+async function touchV(v) { v.updatedAt = Date.now(); await DB.put('vistorias', v); }
+function getPos() {
+  return new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }), () => res(null), { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 });
+  });
+}
+
+/* ---------- fotos ---------- */
+let cap = { vid: null, pos: null, then: null };
+function startCapture(vid, kind) {
+  cap = { vid, pos: kind === 'cam' ? getPos() : Promise.resolve(null), kind, t0: Date.now() };
+  (kind === 'cam' ? $('#camIn') : $('#galIn')).click();
+}
+async function drawStamp(ctx, w, h, lines) {
+  const fs = Math.max(13, Math.round(w * 0.021)), lh = Math.round(fs * 1.35), bh = lh * lines.length + Math.round(fs * 0.9);
+  ctx.fillStyle = 'rgba(42,52,78,.80)'; ctx.fillRect(0, h - bh, w, bh);
+  ctx.fillStyle = '#476AAA'; ctx.fillRect(0, h - bh, w, Math.max(2, Math.round(fs * 0.15)));
+  ctx.fillStyle = '#fff'; ctx.font = `600 ${fs}px Arial, sans-serif`; ctx.textBaseline = 'top';
+  lines.forEach((l, i) => ctx.fillText(l, Math.round(fs * 0.6), h - bh + Math.round(fs * 0.45) + i * lh, w - fs));
+}
+async function processImage(file, ts, pos, v) {
+  let bmp; try { bmp = await createImageBitmap(file); } catch { bmp = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = URL.createObjectURL(file); }); }
+  const sw = bmp.width, sh = bmp.height, r = Math.min(1, S.maxpx / Math.max(sw, sh)), w = Math.round(sw * r), h = Math.round(sh * r);
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const ctx = c.getContext('2d'); ctx.drawImage(bmp, 0, 0, w, h);
+  if (S.carimbo) await drawStamp(ctx, w, h, [Rep.fTs(ts) + '  ·  ' + (v.local || 'Local não informado'), Rep.fLoc(pos ? { lat: pos.lat, lon: pos.lon, acc: pos.acc } : {})]);
+  const blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', 0.84));
+  return { blob, w, h };
+}
+async function addPhotos(files, kind) {
+  const v = await DB.get('vistorias', cap.vid); if (!v) return;
+  const pos = await cap.pos; let last = null;
+  if (kind === 'cam' && !pos) toast('Sem GPS: a foto foi salva sem coordenadas. Verifique a permissão de localização.', 4200);
+  for (const file of files) {
+    const lm = file.lastModified, now = Date.now();
+    const ts = kind === 'cam' ? (lm && Math.abs(now - lm) < 15 * 60000 ? lm : now) : (lm || now);
+    const { blob, w, h } = await processImage(file, ts, pos, v);
+    last = { id: DB.uid(), vistoriaId: v.id, blob, ts, lat: pos?.lat ?? null, lon: pos?.lon ?? null, acc: pos?.acc ?? null, descricao: '', origem: kind === 'cam' ? 'camera' : 'galeria', w, h };
+    await DB.put('fotos', last);
+  }
+  { const x = await DB.get('vistorias', v.id); x.nFotos = (await DB.by('fotos', 'vistoriaId', v.id)).length; await touchV(x); }
+  if (last) { toast(files.length > 1 ? `${files.length} fotos adicionadas` : 'Foto registrada'); await route(); if (files.length === 1 && kind === 'cam') photoSheet(last.id, true); }
+}
+$('#camIn').addEventListener('change', e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) addPhotos(f, 'cam'); });
+$('#galIn').addEventListener('change', e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) addPhotos(f, 'gal'); });
+
+async function photoSheet(id, fromCam) {
+  const f = await DB.get('fotos', id); if (!f) return;
+  const all = (await DB.by('fotos', 'vistoriaId', f.vistoriaId)).sort(byTs); const n = all.findIndex(x => x.id === id) + 1;
+  const el = modal(`<h2>Foto ${pad(n)}</h2><img class="big" src="${urlOf(f)}">
+    <div class="mut small">🕒 ${Rep.fTs(f.ts)}<br>📍 ${Rep.fLoc(f)}${f.origem === 'galeria' ? '<br>(importada da galeria)' : ''}</div>
+    <label>Descrição da foto (legenda)</label><textarea id="pd" rows="3" placeholder="Ex.: Fissura no pilar P12, 2º pavimento">${esc(f.descricao)}</textarea>
+    <div class="row wrap" style="margin-top:12px"><button class="btn grow" id="ps">Salvar</button>${fromCam ? '<button class="btn sec grow" id="pn">Salvar e nova foto</button>' : ''}</div>
+    <div class="row sp" style="margin-top:10px"><button class="btn bad sm" id="pdel">Excluir foto</button><button class="btn ghost sm" id="pc">Fechar</button></div>`);
+  const save = async () => { f.descricao = $('#pd').value.trim(); await DB.put('fotos', f); const v = await DB.get('vistorias', f.vistoriaId); await touchV(v); };
+  el.querySelector('#ps').onclick = async () => { await save(); closeModal(); route(); };
+  const pn = el.querySelector('#pn'); if (pn) pn.onclick = async () => { await save(); closeModal(); await route(); startCapture(f.vistoriaId, 'cam'); };
+  el.querySelector('#pc').onclick = async () => { closeModal(); route(); };
+  el.querySelector('#pdel').onclick = async () => {
+    if (!await confirmar('Excluir esta foto?')) return; await DB.del('fotos', f.id);
+    const v = await DB.get('vistorias', f.vistoriaId); v.nFotos = Math.max(0, (v.nFotos || 1) - 1); (v.constatacoes || []).forEach(c => c.fotoIds = (c.fotoIds || []).filter(x => x !== f.id)); await touchV(v); closeModal(); route();
+  };
+}
+
+/* ---------- rotas ---------- */
+let chain = Promise.resolve();
+function route() { const my = ++token; chain = chain.then(() => my === token ? doRoute() : null).catch(console.error); return chain; }
+async function doRoute() {
+  const my = token; const h = location.hash.replace(/^#\/?/, '').split('/');
+  const view = $('#view'); const R = h[0] || 'obras';
+  try {
+    if (R === 'obras') await vObras(view, my);
+    else if (R === 'obra') await vObra(view, h[1], my);
+    else if (R === 'vistoria') await vVistoria(view, h[1], my);
+    else if (R === 'painel') await vPainel(view, my);
+    else if (R === 'ajustes') await vAjustes(view, my);
+    else location.hash = '#/';
+  } catch (e) { console.error(e); view.innerHTML = `<div class="warnbox">Erro ao abrir a tela: ${esc(e.message)}</div>`; }
+}
+window.addEventListener('hashchange', () => { closeModal(); route(); window.scrollTo(0, 0); });
+
+/* ---------- OBRAS ---------- */
+async function vObras(view) {
+  setTitle('Obras', ''); setNav('obras');
+  const obras = (await DB.all('obras')).sort((a, b) => a.nome.localeCompare(b.nome));
+  const vs = await DB.all('vistorias');
+  const rasc = vs.filter(v => v.status !== 'emitido').sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  const ob = rasc && obras.find(o => o.id === rasc.obraId);
+  view.innerHTML = `
+    ${rasc && ob ? `<div class="card tap" data-go="#/vistoria/${rasc.id}" style="border-color:var(--a)"><div class="mut small">CONTINUAR VISTORIA</div><b>${esc(rasc.local || 'Sem local')}</b><div class="mut small">${esc(ob.nome)} · ${Rep.fData(rasc.data)} · ${rasc.nFotos || 0} foto(s)</div></div>` : ''}
+    <input id="q" type="search" placeholder="Buscar obra ou cliente…" style="margin-bottom:12px">
+    <div id="lst">${obras.map(o => cardObra(o, vs)).join('') || '<div class="empty">Nenhuma obra cadastrada.<br>Toque em <b>+ Obra</b> para começar.</div>'}</div>
+    <button class="btn fab" id="nova">+ Obra</button>`;
+  bindGo(view);
+  $('#q').oninput = e => { const q = e.target.value.toLowerCase(); $('#lst').innerHTML = obras.filter(o => (o.nome + ' ' + o.cliente).toLowerCase().includes(q)).map(o => cardObra(o, vs)).join('') || '<div class="empty">Nada encontrado.</div>'; bindGo(view); };
+  $('#nova').onclick = () => obraSheet();
+}
+const cardObra = (o, vs) => { const mine = vs.filter(v => v.obraId === o.id); return `<div class="card tap" data-go="#/obra/${o.id}"><div class="row sp"><b>${esc(o.nome)}</b><span class="chip">${mine.length} vistoria(s)</span></div><div class="mut small">${esc(o.cliente || '')}${o.endereco ? ' · ' + esc(o.endereco) : ''}</div></div>`; };
+function bindGo(root) { root.querySelectorAll('[data-go]').forEach(el => el.onclick = () => location.hash = el.dataset.go); }
+function obraSheet(o) {
+  const novo = !o; o = o || { id: DB.uid(), nome: '', cliente: '', endereco: '', contrato: '', art: '', criadoEm: Date.now() };
+  const el = modal(`<h2>${novo ? 'Nova obra' : 'Editar obra'}</h2>
+    ${fld('Nome da obra *', 'nome', o, { ph: 'Ex.: Residencial Bellagio' })}${fld('Cliente / contratante', 'cliente', o)}${fld('Endereço da obra', 'endereco', o)}
+    <div class="grid2">${fld('Contrato / proposta', 'contrato', o)}${fld('ART / RRT', 'art', o)}</div>
+    <div class="row" style="margin-top:14px"><button class="btn grow" id="ok">Salvar</button><button class="btn ghost" id="x">Cancelar</button></div>`);
+  bindFields(el, o, () => { });
+  el.querySelector('#x').onclick = closeModal;
+  el.querySelector('#ok').onclick = async () => {
+    if (!o.nome.trim()) return toast('Informe o nome da obra'); await DB.put('obras', o); closeModal();
+    if (novo) location.hash = '#/obra/' + o.id; else route();
+  };
+}
+
+/* ---------- OBRA ---------- */
+async function vObra(view, id) {
+  const o = await DB.get('obras', id); if (!o) return location.hash = '#/';
+  setTitle(o.nome, '#/'); setNav('obras');
+  const vs = (await DB.by('vistorias', 'obraId', id)).sort((a, b) => (b.data + (b.hora || '')).localeCompare(a.data + (a.hora || '')));
+  view.innerHTML = `
+    <div class="card"><div class="mut small">CLIENTE</div><div>${esc(o.cliente || '—')}</div><div class="mut small" style="margin-top:6px">ENDEREÇO</div><div>${esc(o.endereco || '—')}</div>
+    ${(o.contrato || o.art) ? `<div class="mut small" style="margin-top:6px">CONTRATO / ART</div><div>${esc([o.contrato, o.art].filter(Boolean).join(' · '))}</div>` : ''}
+    <div class="row wrap" style="margin-top:10px"><button class="btn sec sm" id="eo">Editar obra</button><button class="btn sec sm" id="xo">Exportar backup da obra</button></div></div>
+    <button class="btn block" id="nv">+ Nova vistoria</button>
+    <h2>Vistorias / locais visitados</h2>
+    ${vs.map(v => `<div class="card tap" data-go="#/vistoria/${v.id}"><div class="row sp"><b>${esc(v.local || 'Sem local')}</b>${stChip(v)}</div><div class="mut small">${Rep.fData(v.data)} ${esc(v.hora || '')} · ${esc(v.tipo || '')} · ${v.nFotos || 0} foto(s)${v.seq ? ' · VT-' + pad(v.seq, 3) + '/' + v.ano : ''}</div></div>`).join('') || '<div class="empty">Nenhuma vistoria nesta obra.</div>'}
+    <div style="margin-top:20px"><button class="btn bad sm" id="do">Excluir obra</button></div>`;
+  bindGo(view);
+  $('#eo').onclick = () => obraSheet(o);
+  $('#xo').onclick = () => exportBackup(o.id);
+  $('#do').onclick = async () => { if (await confirmar(`Excluir a obra "${o.nome}" e TODAS as suas vistorias e fotos? Não há como desfazer.`)) { await DB.delObra(o.id); location.hash = '#/'; } };
+  $('#nv').onclick = async () => {
+    const v = { id: DB.uid(), obraId: o.id, local: '', tipo: TIPOS[0], data: hoje(), hora: agora(), participantes: S.usuario || '', clima: '', objetivo: '', metodologia: METOD, documentos: '', descricao: '', constatacoes: [], conclusao: '', recomendacoes: '', status: 'rascunho', nFotos: 0, gps: null, criadoEm: Date.now(), updatedAt: Date.now() };
+    await DB.put('vistorias', v); tab = 'dados'; location.hash = '#/vistoria/' + v.id;
+    getPos().then(async p => { if (p) { const x = await DB.get('vistorias', v.id); if (x && !x.gps) { x.gps = p; await DB.put('vistorias', x); if (location.hash.includes(v.id) && tab === 'dados') route(); } } });
+  };
+}
+const stChip = v => v.status === 'emitido' ? '<span class="chip ok">Emitido</span>' : '<span class="chip warn">Rascunho</span>';
+
+/* ---------- VISTORIA ---------- */
+async function vVistoria(view, id) {
+  const v = await DB.get('vistorias', id); if (!v) return location.hash = '#/';
+  const o = await DB.get('obras', v.obraId); const fotos = (await DB.by('fotos', 'vistoriaId', id)).sort(byTs);
+  setTitle(v.local || 'Nova vistoria', '#/obra/' + o.id); setNav('obras');
+  const TABS = [['dados', 'Dados'], ['fotos', `Fotos (${fotos.length})`], ['const', `Constatações (${(v.constatacoes || []).length})`], ['concl', 'Conclusão'], ['emitir', 'Emitir']];
+  view.innerHTML = `<div class="seg">${TABS.map(([k, t]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${t}</button>`).join('')}</div><div id="tb"></div>`;
+  view.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { tab = b.dataset.t; route(); });
+  const tb = $('#tb'); const save = (p, val) => patchV(v.id, p, val);
+  if (tab === 'dados') {
+    tb.innerHTML = `<div class="card"><div class="mut small">OBRA</div><b>${esc(o.nome)}</b>
+      ${fld('Local visitado *', 'local', v, { ph: 'Ex.: Bloco B – 3º pavimento / Subsolo' })}
+      ${fld('Tipo de vistoria', 'tipo', v, { list: 'dl-tipo' })}${datalist('dl-tipo', TIPOS)}
+      <div class="grid2 keep">${fld('Data', 'data', v, { type: 'date' })}${fld('Hora', 'hora', v, { type: 'time' })}</div>
+      ${fld('Participantes', 'participantes', v, { ph: 'Nomes e funções' })}
+      ${fld('Condições climáticas', 'clima', v, { list: 'dl-clima' })}${datalist('dl-clima', CLIMAS)}
+      ${fld('Objetivo da vistoria', 'objetivo', v, { area: 1, rows: 3 })}${fld('Metodologia', 'metodologia', v, { area: 1, rows: 3 })}
+      ${fld('Documentos / projetos consultados', 'documentos', v, { area: 1, rows: 2 })}${fld('Descrição do local', 'descricao', v, { area: 1, rows: 4 })}
+      <label>Localização (GPS) da vistoria</label><div class="row"><div class="grow small" id="gpsT">${v.gps ? `📍 ${v.gps.lat.toFixed(6)}, ${v.gps.lon.toFixed(6)}${v.gps.acc ? ' (±' + Math.round(v.gps.acc) + ' m)' : ''}` : 'Não registrada'}</div><button class="btn sec sm" id="gps">Usar minha localização</button></div></div>
+      <button class="btn bad sm" id="dv">Excluir vistoria</button>`;
+    bindFields(tb, v, async (p, val) => { await save(p, val); if (p === 'local') setTitle(v.local || 'Nova vistoria', '#/obra/' + o.id); });
+    $('#gps').onclick = async () => { toast('Obtendo localização…'); const p = await getPos(); if (!p) return toast('Não foi possível obter o GPS. Verifique a permissão.', 4000); v.gps = p; await patchV(v.id, 'gps', p); route(); };
+    $('#dv').onclick = async () => { if (await confirmar('Excluir esta vistoria e suas fotos?')) { await DB.delVistoria(v.id); location.hash = '#/obra/' + o.id; } };
+  }
+  if (tab === 'fotos') {
+    tb.innerHTML = `<div class="row"><button class="btn grow" id="cam">📷 Tirar foto</button><button class="btn sec grow" id="gal">🖼 Da galeria</button></div>
+      <p class="mut small">Cada foto recebe data, hora e coordenadas GPS do momento do registro${S.carimbo ? ', também gravadas na própria imagem' : ''}. Permita a localização quando o aparelho pedir.</p>
+      <div class="photos">${fotos.map((f, i) => `<div class="ph" data-p="${f.id}"><img src="${urlOf(f)}" loading="lazy"><b>${pad(i + 1)}</b><span class="gps">${f.lat != null ? '📍' : '—'}</span></div>`).join('')}</div>
+      ${fotos.length ? '' : '<div class="empty">Nenhuma foto ainda.</div>'}`;
+    $('#cam').onclick = () => startCapture(v.id, 'cam'); $('#gal').onclick = () => startCapture(v.id, 'gal');
+    tb.querySelectorAll('[data-p]').forEach(p => p.onclick = () => photoSheet(p.dataset.p, false));
+  }
+  if (tab === 'const') {
+    const C = v.constatacoes || [];
+    tb.innerHTML = `<button class="btn block" id="nc">+ Nova constatação</button><p class="mut small">Registre cada achado com sua gravidade, recomendação e as fotos que o comprovam.</p>
+      ${C.map((c, i) => `<div class="card tap" data-c="${c.id}"><div class="row sp"><b>${pad(i + 1)}. ${esc(c.titulo || 'Sem título')}</b><span class="chip ${gravCls(c.gravidade)}">${esc(c.gravidade || '—')}</span></div><div class="mut small">${esc(c.local || '')}${(c.fotoIds || []).length ? ' · ' + c.fotoIds.length + ' foto(s)' : ''}</div></div>`).join('') || '<div class="empty">Nenhuma constatação.</div>'}`;
+    $('#nc').onclick = () => constSheet(v, fotos);
+    tb.querySelectorAll('[data-c]').forEach(e => e.onclick = () => constSheet(v, fotos, v.constatacoes.find(c => c.id === e.dataset.c)));
+  }
+  if (tab === 'concl') {
+    tb.innerHTML = `<div class="card">${fld('Conclusão / parecer técnico', 'conclusao', v, { area: 1, rows: 6 })}${fld('Recomendações (uma por linha)', 'recomendacoes', v, { area: 1, rows: 6 })}</div>`;
+    bindFields(tb, v, save);
+  }
+  if (tab === 'emitir') await vEmitir(tb, v, o, fotos);
+}
+function constSheet(v, fotos, c) {
+  const novo = !c; c = c || { id: DB.uid(), titulo: '', gravidade: 'Informativa', local: '', descricao: '', recomendacao: '', fotoIds: [] };
+  const el = modal(`<h2>${novo ? 'Nova constatação' : 'Constatação'}</h2>
+    ${fld('Título *', 'titulo', c, { ph: 'Ex.: Fissura em viga de transição' })}
+    <label>Gravidade</label><select data-f="gravidade">${GRAVS.map(g => `<option ${g === c.gravidade ? 'selected' : ''}>${g}</option>`).join('')}</select>
+    ${fld('Local / elemento', 'local', c, { ph: 'Ex.: Pilar P12 – 2º pav.' })}${fld('Descrição', 'descricao', c, { area: 1, rows: 4 })}${fld('Recomendação', 'recomendacao', c, { area: 1, rows: 3 })}
+    <label>Fotos relacionadas (toque para marcar)</label><div class="photos" id="sp">${fotos.map((f, i) => `<div class="ph ${c.fotoIds.includes(f.id) ? 'sel' : ''}" data-id="${f.id}"><img src="${urlOf(f)}"><b>${pad(i + 1)}</b></div>`).join('') || '<span class="mut small">Tire fotos primeiro na aba Fotos.</span>'}</div>
+    <div class="row" style="margin-top:14px"><button class="btn grow" id="ok">Salvar</button>${novo ? '' : '<button class="btn bad" id="dl">Excluir</button>'}<button class="btn ghost" id="x">Fechar</button></div>`);
+  bindFields(el, c, () => { });
+  el.querySelectorAll('[data-id]').forEach(p => p.onclick = () => { const id = p.dataset.id; c.fotoIds = c.fotoIds.includes(id) ? c.fotoIds.filter(x => x !== id) : [...c.fotoIds, id]; p.classList.toggle('sel'); });
+  el.querySelector('#x').onclick = closeModal;
+  el.querySelector('#ok').onclick = async () => { if (!c.titulo.trim()) return toast('Informe o título'); v.constatacoes = v.constatacoes || []; if (novo) v.constatacoes.push(c); await patchV(v.id, 'constatacoes', v.constatacoes); closeModal(); route(); };
+  const d = el.querySelector('#dl'); if (d) d.onclick = async () => { if (!await confirmar('Excluir esta constatação?')) return; v.constatacoes = v.constatacoes.filter(x => x.id !== c.id); await patchV(v.id, 'constatacoes', v.constatacoes); closeModal(); route(); };
+}
+
+/* ---------- EMISSÃO ---------- */
+async function vEmitir(tb, v, o, fotos) {
+  const ems = (await DB.by('emissoes', 'vistoriaId', v.id)).sort((a, b) => b.data - a.data);
+  const semDesc = fotos.filter(f => !f.descricao).length;
+  const chk = [];
+  if (!v.local) chk.push('Informe o local visitado'); if (!fotos.length) chk.push('Nenhuma foto registrada');
+  if (semDesc) chk.push(`${semDesc} foto(s) sem descrição`); if (!v.objetivo) chk.push('Objetivo não preenchido');
+  if (!v.conclusao) chk.push('Conclusão não preenchida'); if (!S.rt.crea) chk.push('CREA do responsável técnico não informado (Ajustes)');
+  const last = t => ems.find(e => e.tipo === t);
+  const autoRev = t => !!last(t) && v.updatedAt > last(t).data;
+  tb.innerHTML = `${chk.length ? `<div class="warnbox"><b>Antes de emitir:</b><br>• ${chk.map(esc).join('<br>• ')}</div>` : '<div class="okbox">Tudo pronto para emitir.</div>'}
+    <div class="card"><div class="sw"><input type="checkbox" id="off" checked><label for="off">Emissão oficial (gera número, registra no painel)</label></div>
+    <div class="mut small">Desmarcado = rascunho com marca d'água, sem número e sem registro.</div>
+    <div class="sw" id="rvw" ${(last('tecnico') || last('fotografico')) ? '' : 'hidden'}><input type="checkbox" id="nrev"><label for="nrev">Emitir como <b>nova revisão</b> (o conteúdo mudou desde a última emissão)</label></div></div>
+    <div class="card"><b>Memorial de Vistoria Técnica</b> ${last('tecnico') ? `<span class="chip">Rev. ${pad(last('tecnico').rev)}</span>` : ''}<div class="mut small">Identificação, constatações com fotos, quadro-resumo, conclusão e recomendações.</div>
+      <div class="row" style="margin-top:10px"><button class="btn grow" data-e="tecnico:docx">Word (.docx)</button><button class="btn grow" data-e="tecnico:pdf">PDF</button></div></div>
+    <div class="card"><b>Memorial Fotográfico</b> ${last('fotografico') ? `<span class="chip">Rev. ${pad(last('fotografico').rev)}</span>` : ''}<div class="mut small">Todas as fotos com legenda, data, hora e coordenadas (2 por página).</div>
+      <div class="row" style="margin-top:10px"><button class="btn grow" data-e="fotografico:docx">Word (.docx)</button><button class="btn grow" data-e="fotografico:pdf">PDF</button></div></div>
+    <h3>Histórico de emissões</h3>${ems.map(e => `<div class="card small"><b>${esc(e.numero)} · Rev. ${pad(e.rev)}</b> <span class="chip mut">${e.formato.toUpperCase()}</span><div class="mut">${e.tipo === 'tecnico' ? 'Vistoria técnica' : 'Memorial fotográfico'} · ${Rep.fTs(e.data)}${e.usuario ? ' · ' + esc(e.usuario) : ''}</div></div>`).join('') || '<div class="mut small">Nenhuma emissão registrada.</div>'}`;
+  const nrev = $('#nrev'); if (nrev) nrev.checked = autoRev('tecnico') || autoRev('fotografico');
+  tb.querySelectorAll('[data-e]').forEach(b => b.onclick = async () => {
+    const [tipo, fmt] = b.dataset.e.split(':'); b.disabled = true; const txt = b.textContent; b.textContent = 'Gerando…';
+    try { await emitir(v.id, tipo, fmt, $('#off').checked, nrev && nrev.checked); } catch (e) { console.error(e); toast('Erro ao gerar: ' + e.message, 5000); }
+    b.disabled = false; b.textContent = txt;
+  });
+}
+async function emitir(vid, tipo, fmt, oficial, novaRev) {
+  const v = await DB.get('vistorias', vid), o = await DB.get('obras', v.obraId);
+  const fotos = (await DB.by('fotos', 'vistoriaId', vid)).sort(byTs);
+  for (const f of fotos) f.bytes = new Uint8Array(await f.blob.arrayBuffer());
+  let rev = 0, numero = null;
+  if (oficial) {
+    if (!v.seq) { v.ano = new Date().getFullYear(); v.seq = await DB.nextSeq(v.ano); const x = await DB.get('vistorias', vid); x.ano = v.ano; x.seq = v.seq; await DB.put('vistorias', x); }
+    numero = { seq: v.seq, ano: v.ano };
+    const ant = (await DB.by('emissoes', 'vistoriaId', vid)).filter(e => e.tipo === tipo);
+    if (ant.length) rev = Math.max(...ant.map(e => e.rev)) + (novaRev ? 1 : 0);
+  }
+  const ctx = { settings: S, obra: o, vistoria: v, fotos, numero, rev, draft: !oficial };
+  const model = tipo === 'tecnico' ? Rep.buildTecnico(ctx) : Rep.buildFotografico(ctx);
+  const blob = fmt === 'docx' ? await Rep.toDocx(model, S, logo) : await Rep.toPdf(model, S, logo);
+  const pref = tipo === 'tecnico' ? 'VT' : 'MF';
+  const nome = oficial ? `${pref}-${pad(v.seq, 3)}-${v.ano}_Rev${pad(rev)}_${slug(o.nome)}_${slug(v.local)}.${fmt}` : `RASCUNHO_${pref}_${slug(o.nome)}_${slug(v.local)}.${fmt}`;
+  if (oficial) {
+    await DB.put('emissoes', { id: DB.uid(), vistoriaId: v.id, obraId: o.id, tipo, formato: fmt, numero: model.meta.numero, rev, data: Date.now(), arquivo: nome, usuario: S.usuario || '' });
+    const x = await DB.get('vistorias', vid); if (x.status !== 'emitido') { x.status = 'emitido'; await DB.put('vistorias', x); }
+  }
+  const el = modal(`<h2>Arquivo pronto</h2><div class="card small"><b>${esc(nome)}</b><div class="mut">${(blob.size / 1024).toFixed(0)} KB${oficial ? ' · registrado no painel' : ' · rascunho (sem registro)'}</div></div>
+    <div class="row wrap"><button class="btn grow" id="dl">Baixar</button><button class="btn sec grow" id="sh">Compartilhar</button></div><button class="btn ghost block" id="cl" style="margin-top:10px">Fechar</button>`, () => route());
+  el.querySelector('#dl').onclick = () => baixar(blob, nome);
+  el.querySelector('#sh').onclick = () => compartilhar(blob, nome);
+  el.querySelector('#cl').onclick = closeModal;
+}
+function baixar(blob, nome) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nome; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000); }
+async function compartilhar(blob, nome) {
+  const file = new File([blob], nome, { type: blob.type });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: nome }); else toast('Este aparelho não compartilha arquivos: use Baixar.', 3500); } catch (e) { if (e.name !== 'AbortError') toast('Não foi possível compartilhar'); }
+}
+
+/* ---------- PAINEL ADMINISTRATIVO ---------- */
+const filtro = { obra: '', status: '', q: '', de: '', ate: '', grupo: 'obra' };
+async function sha(s) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); }
+async function vPainel(view) {
+  setTitle('Painel administrativo', ''); setNav('painel');
+  if (S.pinHash && sessionStorage.getItem('all-adm') !== S.pinHash) {
+    view.innerHTML = `<div class="pin card"><h2>Acesso restrito</h2><p class="mut small">Digite o PIN do painel</p><input id="pin" type="password" inputmode="numeric" maxlength="12" autofocus><button class="btn block" id="go" style="margin-top:12px">Entrar</button></div>`;
+    $('#go').onclick = async () => { if (await sha($('#pin').value) === S.pinHash) { sessionStorage.setItem('all-adm', S.pinHash); route(); } else toast('PIN incorreto'); };
+    $('#pin').onkeydown = e => { if (e.key === 'Enter') $('#go').click(); }; return;
+  }
+  const [obras, vs, ems] = await Promise.all([DB.all('obras'), DB.all('vistorias'), DB.all('emissoes')]);
+  const om = Object.fromEntries(obras.map(o => [o.id, o]));
+  const dentro = v => (!filtro.obra || v.obraId === filtro.obra) && (!filtro.status || v.status === filtro.status) && (!filtro.de || v.data >= filtro.de) && (!filtro.ate || v.data <= filtro.ate) && (!filtro.q || ((v.local || '') + ' ' + (om[v.obraId]?.nome || '')).toLowerCase().includes(filtro.q.toLowerCase()));
+  const F = vs.filter(dentro).sort((a, b) => b.data.localeCompare(a.data));
+  const ids = new Set(F.map(v => v.id)); const E = ems.filter(e => ids.has(e.vistoriaId)).sort((a, b) => b.data - a.data);
+  const vm = Object.fromEntries(vs.map(v => [v.id, v]));
+  const nFotos = F.reduce((a, v) => a + (v.nFotos || 0), 0);
+  const grupos = {};
+  F.forEach(v => { const k = filtro.grupo === 'obra' ? (om[v.obraId]?.nome || '—') : (v.local || 'Sem local'); (grupos[k] ||= []).push(v); });
+  view.innerHTML = `
+    <div class="kpis"><div class="kpi"><b>${new Set(F.map(v => v.obraId)).size}</b><span>OBRAS</span></div><div class="kpi"><b>${F.length}</b><span>VISTORIAS</span></div><div class="kpi"><b>${F.filter(v => v.status === 'emitido').length}</b><span>EMITIDAS</span></div><div class="kpi"><b>${F.filter(v => v.status !== 'emitido').length}</b><span>EM RASCUNHO</span></div><div class="kpi"><b>${nFotos}</b><span>FOTOS</span></div><div class="kpi"><b>${E.length}</b><span>EMISSÕES</span></div></div>
+    <div class="card"><div class="grid2"><div><label style="margin-top:0">Obra</label><select data-f="obra"><option value="">Todas</option>${obras.map(o => `<option value="${o.id}" ${filtro.obra === o.id ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}</select></div>
+      <div><label style="margin-top:0">Situação</label><select data-f="status"><option value="">Todas</option><option value="rascunho" ${filtro.status === 'rascunho' ? 'selected' : ''}>Rascunho</option><option value="emitido" ${filtro.status === 'emitido' ? 'selected' : ''}>Emitido</option></select></div>
+      <div><label>De</label><input type="date" data-f="de" value="${filtro.de}"></div><div><label>Até</label><input type="date" data-f="ate" value="${filtro.ate}"></div></div>
+      <label>Buscar local ou obra</label><input data-f="q" type="search" value="${esc(filtro.q)}"></div>
+    <div class="seg"><button data-g="obra" class="${filtro.grupo === 'obra' ? 'on' : ''}">Agrupar por obra</button><button data-g="local" class="${filtro.grupo === 'local' ? 'on' : ''}">Agrupar por local visitado</button></div>
+    ${Object.keys(grupos).sort().map(k => { const g = grupos[k]; const ge = E.filter(e => g.some(v => v.id === e.vistoriaId)); return `<h3>${esc(k)} <span class="mut small">· ${g.length} vistoria(s) · ${ge.length} emissão(ões)</span></h3><div class="tw"><table><tr><th>Nº</th><th>${filtro.grupo === 'obra' ? 'Local' : 'Obra'}</th><th>Data</th><th>Situação</th><th>Fotos</th><th>Última emissão</th></tr>${g.map(v => { const le = E.find(e => e.vistoriaId === v.id); return `<tr data-go="#/vistoria/${v.id}" style="cursor:pointer"><td>${v.seq ? 'VT-' + pad(v.seq, 3) + '/' + v.ano : '—'}</td><td>${esc(filtro.grupo === 'obra' ? (v.local || '—') : (om[v.obraId]?.nome || '—'))}</td><td>${Rep.fData(v.data)}</td><td>${stChip(v)}</td><td>${v.nFotos || 0}</td><td>${le ? 'Rev. ' + pad(le.rev) + ' · ' + Rep.fTs(le.data).slice(0, 10) : '—'}</td></tr>`; }).join('')}</table></div>`; }).join('') || '<div class="empty">Nenhuma vistoria para os filtros.</div>'}
+    <div class="row sp"><h2>Registro de emissões</h2><button class="btn sec sm" id="csv">Exportar CSV</button></div>
+    <div class="tw"><table><tr><th>Data/hora</th><th>Documento</th><th>Rev.</th><th>Tipo</th><th>Fmt</th><th>Obra · Local</th><th>Emitido por</th></tr>${E.slice(0, 80).map(e => `<tr><td>${Rep.fTs(e.data)}</td><td>${esc(e.numero)}</td><td>${pad(e.rev)}</td><td>${e.tipo === 'tecnico' ? 'Vistoria técnica' : 'Mem. fotográfico'}</td><td>${e.formato.toUpperCase()}</td><td>${esc((om[e.obraId]?.nome || '') + ' · ' + (vm[e.vistoriaId]?.local || ''))}</td><td>${esc(e.usuario || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">Sem emissões.</td></tr>'}</table></div>`;
+  bindGo(view);
+  view.querySelectorAll('[data-f]').forEach(el => el.onchange = () => { filtro[el.dataset.f] = el.value; route(); });
+  view.querySelectorAll('[data-f="q"]').forEach(el => { el.onchange = null; el.onkeydown = e => { if (e.key === 'Enter') { filtro.q = el.value; route(); } }; el.onblur = () => { if (filtro.q !== el.value) { filtro.q = el.value; route(); } }; });
+  view.querySelectorAll('[data-g]').forEach(b => b.onclick = () => { filtro.grupo = b.dataset.g; route(); });
+  $('#csv').onclick = () => {
+    const rows = [['Data/hora', 'Documento', 'Revisão', 'Tipo', 'Formato', 'Obra', 'Local', 'Arquivo', 'Emitido por'], ...E.map(e => [Rep.fTs(e.data), e.numero, pad(e.rev), e.tipo, e.formato, om[e.obraId]?.nome || '', vm[e.vistoriaId]?.local || '', e.arquivo, e.usuario || ''])];
+    baixar(new Blob(['﻿' + rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(';')).join('\r\n')], { type: 'text/csv' }), `emissoes_ALL_${hoje()}.csv`);
+  };
+}
+
+/* ---------- AJUSTES / BACKUP ---------- */
+async function vAjustes(view) {
+  setTitle('Ajustes', ''); setNav('ajustes');
+  view.innerHTML = `
+    <div class="card"><h3 style="margin-top:0">Empresa (cabeçalho e rodapé dos documentos)</h3>${fld('Nome', 'empresa.nome', S)}${fld('CNPJ', 'empresa.cnpj', S)}${fld('Endereço', 'empresa.endereco', S)}<div class="grid2">${fld('Telefone', 'empresa.fone', S)}${fld('E-mail', 'empresa.email', S)}</div></div>
+    <div class="card"><h3 style="margin-top:0">Responsável técnico (assinatura)</h3>${fld('Nome', 'rt.nome', S)}<div class="grid2">${fld('Título', 'rt.titulo', S, { ph: 'Ex.: Engenheiro Civil' })}${fld('CREA', 'rt.crea', S, { ph: 'Ex.: 12345/D-DF' })}</div></div>
+    <div class="card"><h3 style="margin-top:0">Vistoriador (este aparelho)</h3>${fld('Seu nome (aparece no registro de emissões)', 'usuario', S)}
+      <div class="sw"><input type="checkbox" data-f="carimbo" id="st" ${S.carimbo ? 'checked' : ''}><label for="st">Gravar data, hora e GPS na própria imagem</label></div>
+      <label>Tamanho máximo das fotos</label><select data-f="maxpx"><option value="1280" ${S.maxpx == 1280 ? 'selected' : ''}>Leve (1280 px)</option><option value="1600" ${S.maxpx == 1600 ? 'selected' : ''}>Padrão (1600 px)</option><option value="2400" ${S.maxpx == 2400 ? 'selected' : ''}>Alta (2400 px)</option></select></div>
+    <div class="card"><h3 style="margin-top:0">PIN do painel administrativo</h3><p class="mut small">Impede que outra pessoa abra o Painel neste aparelho. É uma barreira simples de uso, não criptografia dos dados.</p>
+      <div class="row"><input id="pin1" type="password" inputmode="numeric" placeholder="Novo PIN (4 a 12 dígitos)" maxlength="12"><button class="btn sm" id="sp">${S.pinHash ? 'Trocar' : 'Definir'}</button></div>${S.pinHash ? '<button class="btn ghost sm" id="rp" style="margin-top:8px">Remover PIN</button>' : ''}</div>
+    <div class="card"><h3 style="margin-top:0">Backup e consolidação</h3><p class="mut small">Os dados ficam só neste aparelho. Exporte o backup para guardar ou para reunir vistorias de vários celulares: ao importar, os registros são <b>mesclados</b>, sem apagar os existentes.</p>
+      <div class="row wrap"><button class="btn sec grow" id="ex">Exportar tudo (.json)</button><button class="btn sec grow" id="im">Importar backup</button></div><div class="mut small" id="stg" style="margin-top:8px"></div></div>
+    <div class="card" id="inst"><h3 style="margin-top:0">Instalar no celular</h3><p class="small">Android (Chrome): menu ⋮ → <b>Instalar app</b>.<br>iPhone (Safari): <b>Compartilhar</b> → <b>Adicionar à Tela de Início</b>.</p><button class="btn sm" id="ib" hidden>Instalar agora</button></div>
+    <p class="mut small" style="text-align:center">ALL Vistorias v1.0 · funciona sem internet após o primeiro acesso</p>`;
+  bindFields(view, S, () => saveSettings());
+  $('#sp').onclick = async () => { const p = $('#pin1').value; if (!/^\d{4,12}$/.test(p)) return toast('Use de 4 a 12 dígitos'); S.pinHash = await sha(p); sessionStorage.setItem('all-adm', S.pinHash); await saveSettings(); toast('PIN definido'); route(); };
+  const rp = $('#rp'); if (rp) rp.onclick = async () => { S.pinHash = ''; await saveSettings(); route(); };
+  $('#ex').onclick = () => exportBackup(); $('#im').onclick = () => $('#impIn').click();
+  if (deferredInstall) { $('#ib').hidden = false; $('#ib').onclick = () => { deferredInstall.prompt(); }; }
+  if (navigator.storage?.estimate) navigator.storage.estimate().then(e => { $('#stg').textContent = `Armazenamento usado: ${(e.usage / 1048576).toFixed(1)} MB`; });
+}
+const blobToData = b => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });
+async function exportBackup(obraId) {
+  toast('Preparando backup…');
+  let obras = await DB.all('obras'), vs = await DB.all('vistorias'), ems = await DB.all('emissoes');
+  if (obraId) { obras = obras.filter(o => o.id === obraId); vs = vs.filter(v => v.obraId === obraId); ems = ems.filter(e => e.obraId === obraId); }
+  const vids = new Set(vs.map(v => v.id)); const seqs = {};
+  for (const k of [new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1]) seqs[k] = await DB.getSetting('seq-' + k, 0);
+  const parts = [`{"app":"all-vistorias","v":1,"exportadoEm":${Date.now()},"seqs":${JSON.stringify(seqs)},"obras":${JSON.stringify(obras)},"vistorias":${JSON.stringify(vs)},"emissoes":${JSON.stringify(ems)},"fotos":[`];
+  let first = true;
+  for (const f of await DB.all('fotos')) { if (!vids.has(f.vistoriaId)) continue; const { blob, ...rest } = f; parts.push((first ? '' : ',') + JSON.stringify({ ...rest, data: await blobToData(blob) })); first = false; }
+  parts.push(']}');
+  baixar(new Blob(parts, { type: 'application/json' }), `ALL-Vistorias_backup_${obraId ? 'obra_' : ''}${hoje()}.json`);
+}
+$('#impIn').addEventListener('change', async e => {
+  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+  try {
+    toast('Importando…'); const d = JSON.parse(await file.text()); if (d.app !== 'all-vistorias') throw new Error('arquivo inválido');
+    for (const o of d.obras) await DB.put('obras', o);
+    for (const v of d.vistorias) { const cur = await DB.get('vistorias', v.id); if (!cur || (cur.updatedAt || 0) <= (v.updatedAt || 0)) await DB.put('vistorias', v); }
+    for (const x of d.emissoes) await DB.put('emissoes', x);
+    for (const f of d.fotos) { const { data, ...rest } = f; await DB.put('fotos', { ...rest, blob: await (await fetch(data)).blob() }); }
+    for (const [ano, n] of Object.entries(d.seqs || {})) { const cur = await DB.getSetting('seq-' + ano, 0); if (n > cur) await DB.setSetting('seq-' + ano, n); }
+    toast(`Importado: ${d.obras.length} obra(s), ${d.vistorias.length} vistoria(s), ${d.fotos.length} foto(s)`, 4500); route();
+  } catch (err) { toast('Falha ao importar: ' + err.message, 5000); }
+});
+
+/* ---------- início ---------- */
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+(async () => {
+  await DB.open(); await loadSettings(); await loadLogo();
+  if (navigator.storage?.persist) navigator.storage.persist();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
+  route();
+})();

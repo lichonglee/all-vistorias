@@ -1,0 +1,15 @@
+/* Service worker: guarda o aplicativo no aparelho para funcionar sem internet. */
+const CACHE = 'all-vistorias-v1';
+const FILES = ['./', 'index.html', 'app.css', 'app.js', 'db.js', 'report.js', 'manifest.webmanifest',
+  'vendor/docx.iife.js', 'vendor/pdf-lib.min.js', 'assets/logo.png', 'assets/icon-192.png', 'assets/icon-512.png'];
+self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+});
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(hit => {
+    const net = fetch(e.request).then(r => { if (r.ok && new URL(e.request.url).origin === location.origin) caches.open(CACHE).then(c => c.put(e.request, r.clone())); return r; }).catch(() => hit);
+    return hit || net; // abre do cache e atualiza em segundo plano
+  }));
+});
