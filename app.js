@@ -195,6 +195,7 @@ async function vObra(view, id) {
     getPos().then(async p => { if (p) { const x = await DB.get('vistorias', v.id); if (x && !x.gps) { x.gps = p; await DB.put('vistorias', x); if (location.hash.includes(v.id) && tab === 'dados') route(); } } });
   };
 }
+const tipoNome = (t, curto) => ({ tecnico: 'Vistoria técnica', fotografico: curto ? 'Mem. fotográfico' : 'Memorial fotográfico', consolidado: 'Consolidado' }[t] || t);
 const stChip = v => v.status === 'emitido' ? '<span class="chip ok">Emitido</span>' : '<span class="chip warn">Rascunho</span>';
 
 /* ---------- VISTORIA ---------- */
@@ -268,15 +269,17 @@ async function vEmitir(tb, v, o, fotos) {
   const last = t => ems.find(e => e.tipo === t);
   const autoRev = t => !!last(t) && v.updatedAt > last(t).data;
   tb.innerHTML = `${chk.length ? `<div class="warnbox"><b>Antes de emitir:</b><br>• ${chk.map(esc).join('<br>• ')}</div>` : '<div class="okbox">Tudo pronto para emitir.</div>'}
-    <div class="card"><div class="sw"><input type="checkbox" id="off" checked><label for="off">Emissão oficial (gera número, registra no painel)</label></div>
-    <div class="mut small">Desmarcado = rascunho com marca d'água, sem número e sem registro.</div>
-    <div class="sw" id="rvw" ${(last('tecnico') || last('fotografico')) ? '' : 'hidden'}><input type="checkbox" id="nrev"><label for="nrev">Emitir como <b>nova revisão</b> (o conteúdo mudou desde a última emissão)</label></div></div>
+    <div class="card"><div class="sw"><input type="checkbox" id="off"><label for="off">Emissão oficial (gera número, registra no painel)</label></div>
+    <div class="mut small">Desmarcado (padrão) = rascunho com marca d'água, sem número e sem registro. Marque só ao emitir o documento final.</div>
+    <div class="sw" id="rvw" ${(last('tecnico') || last('fotografico') || last('consolidado')) ? '' : 'hidden'}><input type="checkbox" id="nrev"><label for="nrev">Emitir como <b>nova revisão</b> (o conteúdo mudou desde a última emissão)</label></div></div>
     <div class="card"><b>Memorial de Vistoria Técnica</b> ${last('tecnico') ? `<span class="chip">Rev. ${pad(last('tecnico').rev)}</span>` : ''}<div class="mut small">Identificação, constatações com fotos, quadro-resumo, conclusão e recomendações.</div>
       <div class="row" style="margin-top:10px"><button class="btn grow" data-e="tecnico:docx">Word (.docx)</button><button class="btn grow" data-e="tecnico:pdf">PDF</button></div></div>
     <div class="card"><b>Memorial Fotográfico</b> ${last('fotografico') ? `<span class="chip">Rev. ${pad(last('fotografico').rev)}</span>` : ''}<div class="mut small">Todas as fotos com legenda, data, hora e coordenadas (2 por página).</div>
       <div class="row" style="margin-top:10px"><button class="btn grow" data-e="fotografico:docx">Word (.docx)</button><button class="btn grow" data-e="fotografico:pdf">PDF</button></div></div>
-    <h3>Histórico de emissões</h3>${ems.map(e => `<div class="card small"><b>${esc(e.numero)} · Rev. ${pad(e.rev)}</b> <span class="chip mut">${e.formato.toUpperCase()}</span><div class="mut">${e.tipo === 'tecnico' ? 'Vistoria técnica' : 'Memorial fotográfico'} · ${Rep.fTs(e.data)}${e.usuario ? ' · ' + esc(e.usuario) : ''}</div></div>`).join('') || '<div class="mut small">Nenhuma emissão registrada.</div>'}`;
-  const nrev = $('#nrev'); if (nrev) nrev.checked = autoRev('tecnico') || autoRev('fotografico');
+    <div class="card" style="border-color:var(--a)"><b>Relatório Consolidado</b> ${last('consolidado') ? `<span class="chip">Rev. ${pad(last('consolidado').rev)}</span>` : ''}<div class="mut small">Vistoria técnica e registro fotográfico em um único documento, com uma só capa e um só cabeçalho (numeração RC).</div>
+      <div class="row" style="margin-top:10px"><button class="btn grow" data-e="consolidado:docx">Word (.docx)</button><button class="btn grow" data-e="consolidado:pdf">PDF</button></div></div>
+    <h3>Histórico de emissões</h3>${ems.map(e => `<div class="card small"><b>${esc(e.numero)} · Rev. ${pad(e.rev)}</b> <span class="chip mut">${e.formato.toUpperCase()}</span><div class="mut">${tipoNome(e.tipo)} · ${Rep.fTs(e.data)}${e.usuario ? ' · ' + esc(e.usuario) : ''}</div></div>`).join('') || '<div class="mut small">Nenhuma emissão registrada.</div>'}`;
+  const nrev = $('#nrev'); if (nrev) nrev.checked = autoRev('tecnico') || autoRev('fotografico') || autoRev('consolidado');
   tb.querySelectorAll('[data-e]').forEach(b => b.onclick = async () => {
     const [tipo, fmt] = b.dataset.e.split(':'); b.disabled = true; const txt = b.textContent; b.textContent = 'Gerando…';
     try { await emitir(v.id, tipo, fmt, $('#off').checked, nrev && nrev.checked); } catch (e) { console.error(e); toast('Erro ao gerar: ' + e.message, 5000); }
@@ -295,9 +298,9 @@ async function emitir(vid, tipo, fmt, oficial, novaRev) {
     if (ant.length) rev = Math.max(...ant.map(e => e.rev)) + (novaRev ? 1 : 0);
   }
   const ctx = { settings: S, obra: o, vistoria: v, fotos, numero, rev, draft: !oficial };
-  const model = tipo === 'tecnico' ? Rep.buildTecnico(ctx) : Rep.buildFotografico(ctx);
+  const model = tipo === 'tecnico' ? Rep.buildTecnico(ctx) : tipo === 'consolidado' ? Rep.buildConsolidado(ctx) : Rep.buildFotografico(ctx);
   const blob = fmt === 'docx' ? await Rep.toDocx(model, S, logo) : await Rep.toPdf(model, S, logo);
-  const pref = tipo === 'tecnico' ? 'VT' : 'MF';
+  const pref = { tecnico: 'VT', fotografico: 'MF', consolidado: 'RC' }[tipo];
   const nome = oficial ? `${pref}-${pad(v.seq, 3)}-${v.ano}_Rev${pad(rev)}_${slug(o.nome)}_${slug(v.local)}.${fmt}` : `RASCUNHO_${pref}_${slug(o.nome)}_${slug(v.local)}.${fmt}`;
   if (oficial) {
     await DB.put('emissoes', { id: DB.uid(), vistoriaId: v.id, obraId: o.id, tipo, formato: fmt, numero: model.meta.numero, rev, data: Date.now(), arquivo: nome, usuario: S.usuario || '' });
@@ -343,7 +346,7 @@ async function vPainel(view) {
     <div class="seg"><button data-g="obra" class="${filtro.grupo === 'obra' ? 'on' : ''}">Agrupar por obra</button><button data-g="local" class="${filtro.grupo === 'local' ? 'on' : ''}">Agrupar por local visitado</button></div>
     ${Object.keys(grupos).sort().map(k => { const g = grupos[k]; const ge = E.filter(e => g.some(v => v.id === e.vistoriaId)); return `<h3>${esc(k)} <span class="mut small">· ${g.length} vistoria(s) · ${ge.length} emissão(ões)</span></h3><div class="tw"><table><tr><th>Nº</th><th>${filtro.grupo === 'obra' ? 'Local' : 'Obra'}</th><th>Data</th><th>Situação</th><th>Fotos</th><th>Última emissão</th></tr>${g.map(v => { const le = E.find(e => e.vistoriaId === v.id); return `<tr data-go="#/vistoria/${v.id}" style="cursor:pointer"><td>${v.seq ? 'VT-' + pad(v.seq, 3) + '/' + v.ano : '—'}</td><td>${esc(filtro.grupo === 'obra' ? (v.local || '—') : (om[v.obraId]?.nome || '—'))}</td><td>${Rep.fData(v.data)}</td><td>${stChip(v)}</td><td>${v.nFotos || 0}</td><td>${le ? 'Rev. ' + pad(le.rev) + ' · ' + Rep.fTs(le.data).slice(0, 10) : '—'}</td></tr>`; }).join('')}</table></div>`; }).join('') || '<div class="empty">Nenhuma vistoria para os filtros.</div>'}
     <div class="row sp"><h2>Registro de emissões</h2><button class="btn sec sm" id="csv">Exportar CSV</button></div>
-    <div class="tw"><table><tr><th>Data/hora</th><th>Documento</th><th>Rev.</th><th>Tipo</th><th>Fmt</th><th>Obra · Local</th><th>Emitido por</th></tr>${E.slice(0, 80).map(e => `<tr><td>${Rep.fTs(e.data)}</td><td>${esc(e.numero)}</td><td>${pad(e.rev)}</td><td>${e.tipo === 'tecnico' ? 'Vistoria técnica' : 'Mem. fotográfico'}</td><td>${e.formato.toUpperCase()}</td><td>${esc((om[e.obraId]?.nome || '') + ' · ' + (vm[e.vistoriaId]?.local || ''))}</td><td>${esc(e.usuario || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">Sem emissões.</td></tr>'}</table></div>`;
+    <div class="tw"><table><tr><th>Data/hora</th><th>Documento</th><th>Rev.</th><th>Tipo</th><th>Fmt</th><th>Obra · Local</th><th>Emitido por</th></tr>${E.slice(0, 80).map(e => `<tr><td>${Rep.fTs(e.data)}</td><td>${esc(e.numero)}</td><td>${pad(e.rev)}</td><td>${tipoNome(e.tipo, true)}</td><td>${e.formato.toUpperCase()}</td><td>${esc((om[e.obraId]?.nome || '') + ' · ' + (vm[e.vistoriaId]?.local || ''))}</td><td>${esc(e.usuario || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">Sem emissões.</td></tr>'}</table></div>`;
   bindGo(view);
   view.querySelectorAll('[data-f]').forEach(el => el.onchange = () => { filtro[el.dataset.f] = el.value; route(); });
   view.querySelectorAll('[data-f="q"]').forEach(el => { el.onchange = null; el.onkeydown = e => { if (e.key === 'Enter') { filtro.q = el.value; route(); } }; el.onblur = () => { if (filtro.q !== el.value) { filtro.q = el.value; route(); } }; });

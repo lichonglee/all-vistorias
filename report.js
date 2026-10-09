@@ -18,15 +18,16 @@ const Rep = (() => {
     return { numero, titulo, rev: pad(rev), draft, obra: o.nome, local: v.local };
   }
 
-  function buildTecnico(ctx) {
+  function buildTecnico(ctx, cons) {
     const { settings: S, obra: o, vistoria: v, fotos } = ctx;
-    const meta = head(ctx, 'MEMORIAL DE VISTORIA TÉCNICA', 'VT');
+    const meta = cons ? head(ctx, 'RELATÓRIO CONSOLIDADO DE VISTORIA', 'RC') : head(ctx, 'MEMORIAL DE VISTORIA TÉCNICA', 'VT');
     const idx = {}; fotos.forEach((f, i) => idx[f.id] = i + 1);
     const B = [];
     B.push({ t: 'cover', title: meta.titulo, sub: v.tipo || 'Vistoria técnica', rows: [
       ['Documento nº', `${meta.numero}  ·  Revisão ${meta.rev}`],
       ['Obra', o.nome], ['Cliente', o.cliente || '—'], ['Local visitado', v.local || '—'],
       ['Data da vistoria', `${fData(v.data)}${v.hora ? ' às ' + v.hora : ''}`],
+      ...(cons ? [['Conteúdo', `Memorial de vistoria técnica e registro fotográfico (${fotos.length} foto${fotos.length === 1 ? '' : 's'})`]] : []),
       ['Responsável técnico', [S.rt.nome, S.rt.titulo, S.rt.crea && 'CREA ' + S.rt.crea].filter(Boolean).join(' · ') || '—'],
     ] });
     B.push({ t: 'h1', text: '1. IDENTIFICAÇÃO' });
@@ -67,10 +68,19 @@ const Rep = (() => {
     const rec = (v.recomendacoes || '').split('\n').map(s => s.trim()).filter(Boolean);
     B.push({ t: 'h1', text: `${C.length ? 8 : 7}. RECOMENDAÇÕES` });
     if (rec.length) B.push({ t: 'bullets', items: rec }); else B.push({ t: 'p', text: 'Sem recomendações adicionais.' });
-    B.push({ t: 'p', text: `O registro fotográfico completo desta vistoria (${fotos.length} foto${fotos.length === 1 ? '' : 's'}) encontra-se no Memorial Fotográfico associado.`, small: true });
+    if (cons) {
+      B.push({ t: 'pagebreak' });
+      B.push({ t: 'h1', text: `${C.length ? 9 : 8}. REGISTRO FOTOGRÁFICO` });
+      B.push({ t: 'p', text: 'As fotografias a seguir foram registradas in loco por meio de aplicativo próprio, que associa a cada imagem a data, a hora e as coordenadas geográficas do aparelho no instante do registro.', small: true });
+      if (fotos.length) B.push({ t: 'photos', mh: 7.6, items: fotos.map((f, i) => ({ f, cap1: `Foto ${nn(i + 1)} – ${f.descricao || 'Sem descrição'}`, cap2: legenda(f) })) });
+      else B.push({ t: 'p', text: 'Nenhuma foto registrada.' });
+    } else {
+      B.push({ t: 'p', text: `O registro fotográfico completo desta vistoria (${fotos.length} foto${fotos.length === 1 ? '' : 's'}) encontra-se no Memorial Fotográfico associado.`, small: true });
+    }
     B.push({ t: 'sign', city: 'Brasília-DF', data: fData(v.data), rt: S.rt });
     return { blocks: B, meta };
   }
+  function buildConsolidado(ctx) { return buildTecnico(ctx, true); }
 
   function buildFotografico(ctx) {
     const { settings: S, obra: o, vistoria: v, fotos } = ctx;
@@ -122,6 +132,8 @@ const Rep = (() => {
         out.push(P([run(S.empresa.nome + ' · CNPJ ' + S.empresa.cnpj, { size: 17, color: MUTED })], { align: A.CENTER, after: 0, before: 600 }));
         out.push(P([run(S.empresa.endereco, { size: 17, color: MUTED })], { align: A.CENTER, after: 0 }));
         out.push(P([run('')], { pb: true, after: 0 }));
+      } else if (b.t === 'pagebreak') {
+        out.push(P([run('')], { pb: true, after: 0 }));
       } else if (b.t === 'h1') {
         out.push(P([run(b.text, { bold: true, size: 25, color: DARK })], { before: 280, after: 140, keepNext: true, border: { bottom: { style: D.BorderStyle.SINGLE, size: 8, color: BLUE, space: 3 } } }));
       } else if (b.t === 'h2') {
@@ -164,7 +176,7 @@ const Rep = (() => {
       } else if (b.t === 'photos') {
         b.items.forEach((it, i) => {
           const pb = i > 0 && i % 2 === 0;
-          out.push(P([img(it.f, 15.5, 8.8)], { align: A.CENTER, after: 60, pb, keepNext: true, before: i % 2 ? 300 : 0 }));
+          out.push(P([img(it.f, 15.5, b.mh || 8.8)], { align: A.CENTER, after: 60, pb, keepNext: true, before: i % 2 ? 300 : 0 }));
           out.push(P([run(it.cap1, { bold: true, size: 20, color: INK })], { align: A.CENTER, after: 20, keepNext: true }));
           out.push(P([run(it.cap2, { size: 17, color: MUTED })], { align: A.CENTER, after: 120 }));
         });
@@ -306,7 +318,8 @@ const Rep = (() => {
         page.drawText(f1, { x: (PW - F.widthOfTextAtSize(f1, 8.5)) / 2, y: 92, size: 8.5, font: F, color: hex(MUTED) });
         page.drawText(f2, { x: (PW - F.widthOfTextAtSize(f2, 8.5)) / 2, y: 80, size: 8.5, font: F, color: hex(MUTED) });
         np(); first = false;
-      } else if (b.t === 'h1') h1(b.text);
+      } else if (b.t === 'pagebreak') np();
+      else if (b.t === 'h1') h1(b.text);
       else if (b.t === 'h2') h2(b.text, b.tag, b.tagColor);
       else if (b.t === 'p') para(b.text, { label: b.label, small: b.small, size: b.small ? 8.5 : 10.5, font: b.small ? FI : F, color: b.small ? hex(MUTED) : undefined, justify: !b.label });
       else if (b.t === 'bullets') b.items.forEach(t => { const lines = wrap(t, F, 10.5, CW - 16); need(lines.length * 15 + 4); y -= 15; page.drawText('•', { x: ML + 4, y, size: 10.5, font: FB, color: hex(BLUE) }); page.drawText(lines[0], { x: ML + 16, y, size: 10.5, font: F, color: hex('222B3F') }); drawLines(lines.slice(1), ML + 16, F, 10.5, hex('222B3F'), 15); y -= 3; });
@@ -330,7 +343,7 @@ const Rep = (() => {
       } else if (b.t === 'photos') {
         const cs = 10;
         for (let i = 0; i < b.items.length; i++) {
-          const it = b.items[i]; const mw = CW, mh = 8.6 * CM;
+          const it = b.items[i]; const mw = CW, mh = (b.mh || 8.6) * CM;
           const hh = fit(it.f, mw, mh).h + capH(it, mw, cs);
           if (i % 2 === 0 && i > 0) np(); else need(hh + 10);
           const used = await photoBox(it, ML, y, mw, mh, cs); y -= used + 22;
@@ -365,5 +378,5 @@ const Rep = (() => {
     return new Blob([await pdf.save()], { type: 'application/pdf' });
   }
 
-  return { buildTecnico, buildFotografico, toDocx, toPdf, fTs, fLoc, fData, legenda, GRAV };
+  return { buildTecnico, buildFotografico, buildConsolidado, toDocx, toPdf, fTs, fLoc, fData, legenda, GRAV };
 })();

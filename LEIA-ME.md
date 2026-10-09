@@ -19,7 +19,7 @@ Abra uma vez com internet; depois disso funciona offline. Permita **Câmera/Foto
 2. **Obras → + Obra → + Nova vistoria.**
 3. Aba **Fotos → Tirar foto:** cada foto guarda data/hora e GPS do momento do registro (também gravados na imagem). Escreva a descrição de cada foto.
 4. **Constatações:** achados com gravidade, recomendação e fotos relacionadas. **Conclusão:** parecer e recomendações.
-5. **Emitir:** Memorial de Vistoria Técnica e Memorial Fotográfico em **Word e PDF**, com logo, cores, cabeçalho e rodapé da ALL. Use "Compartilhar" para enviar por WhatsApp/e-mail.
+5. **Emitir:** Memorial de Vistoria Técnica, Memorial Fotográfico e **Relatório Consolidado** (os dois em um único documento, sem repetir capa e cabeçalho) em **Word e PDF**, com logo, cores, cabeçalho e rodapé da ALL. Use "Compartilhar" para enviar por WhatsApp/e-mail.
 
 ## 4. Painel administrativo (aba Painel)
 Indicadores, filtros por obra, local, situação e período, agrupamento por obra ou por local visitado, registro de emissões (número VT/MF, revisão, formato, data, emissor) e exportação em CSV. Emissão oficial gera numeração sequencial (VT-001/2026) e controla revisões; sem marcar "oficial" sai um rascunho com marca d'água, sem registro.
