@@ -108,12 +108,16 @@ $('#galIn').addEventListener('change', e => { const f = [...e.target.files]; e.t
 async function photoSheet(id, fromCam) {
   const f = await DB.get('fotos', id); if (!f) return;
   const all = (await DB.by('fotos', 'vistoriaId', f.vistoriaId)).sort(byTs); const n = all.findIndex(x => x.id === id) + 1;
+  const nums = [...new Set((f.marks || []).filter(m => m.t === 'num').map(m => m.n))].sort((x, y) => x - y);
   const el = modal(`<h2>Foto ${pad(n)}</h2><img class="big" src="${urlOf(f)}">
     <div class="mut small">🕒 ${Rep.fTs(f.ts)}<br>📍 ${Rep.fLoc(f)}${f.origem === 'galeria' ? '<br>(importada da galeria)' : ''}</div>
+    <button class="btn sec block" id="pmk" style="margin-top:10px">✏️ Marcar foto (seta, formas, números)</button>
     <label>Descrição da foto (legenda)</label><textarea id="pd" rows="3" placeholder="Ex.: Fissura no pilar P12, 2º pavimento">${esc(f.descricao)}</textarea>
+    ${nums.length ? `<label>Legenda dos números marcados</label>${nums.map(k => `<div class="row" style="margin-bottom:6px"><b class="numb">${k}</b><input class="pn" data-n="${k}" placeholder="O que é o ponto ${k}?" value="${esc((f.notas || []).find(x => x.n === k)?.txt || '')}"></div>`).join('')}` : ''}
     <div class="row wrap" style="margin-top:12px"><button class="btn grow" id="ps">Salvar</button>${fromCam ? '<button class="btn sec grow" id="pn">Salvar e nova foto</button>' : ''}</div>
     <div class="row sp" style="margin-top:10px"><button class="btn bad sm" id="pdel">Excluir foto</button><button class="btn ghost sm" id="pc">Fechar</button></div>`);
-  const save = async () => { f.descricao = $('#pd').value.trim(); await DB.put('fotos', f); const v = await DB.get('vistorias', f.vistoriaId); await touchV(v); };
+  const save = async () => { f.descricao = $('#pd').value.trim(); f.notas = nums.map(k => ({ n: k, txt: (el.querySelector(`.pn[data-n="${k}"]`)?.value || '').trim() })); await DB.put('fotos', f); const v = await DB.get('vistorias', f.vistoriaId); await touchV(v); };
+  el.querySelector('#pmk').onclick = async () => { await save(); closeModal(); const ok = await editarMarcas(f); await route(); photoSheet(f.id, fromCam); };
   el.querySelector('#ps').onclick = async () => { await save(); closeModal(); route(); };
   const pn = el.querySelector('#pn'); if (pn) pn.onclick = async () => { await save(); closeModal(); await route(); startCapture(f.vistoriaId, 'cam'); };
   el.querySelector('#pc').onclick = async () => { closeModal(); route(); };
@@ -121,6 +125,82 @@ async function photoSheet(id, fromCam) {
     if (!await confirmar('Excluir esta foto?')) return; await DB.del('fotos', f.id);
     const v = await DB.get('vistorias', f.vistoriaId); v.nFotos = Math.max(0, (v.nFotos || 1) - 1); (v.constatacoes || []).forEach(c => c.fotoIds = (c.fotoIds || []).filter(x => x !== f.id)); await touchV(v); closeModal(); route();
   };
+}
+
+
+/* ---------- editor de marcações (seta, retângulo, círculo, números) ---------- */
+const MCOR = { vermelho: '#E02020', amarelo: '#FFD400', azul: '#1E6BFF', branco: '#FFFFFF', preto: '#111111' };
+function desenharMarcas(ctx, w, h, marks) {
+  const lw = Math.max(3, w * 0.006);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const m of marks) {
+    const col = MCOR[m.c] || m.c; ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw;
+    const X = v => v * w, Y = v => v * h;
+    if (m.t === 'rect') { ctx.strokeRect(X(Math.min(m.x1, m.x2)), Y(Math.min(m.y1, m.y2)), Math.abs(X(m.x2) - X(m.x1)), Math.abs(Y(m.y2) - Y(m.y1))); }
+    else if (m.t === 'ell') { ctx.beginPath(); ctx.ellipse(X((m.x1 + m.x2) / 2), Y((m.y1 + m.y2) / 2), Math.max(1, Math.abs(X(m.x2) - X(m.x1)) / 2), Math.max(1, Math.abs(Y(m.y2) - Y(m.y1)) / 2), 0, 0, 7); ctx.stroke(); }
+    else if (m.t === 'arr') {
+      const x1 = X(m.x1), y1 = Y(m.y1), x2 = X(m.x2), y2 = Y(m.y2), L = Math.hypot(x2 - x1, y2 - y1); if (L < 2) continue;
+      const a = Math.atan2(y2 - y1, x2 - x1), hl = Math.min(L * 0.5, Math.max(lw * 5, w * 0.035));
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2 - Math.cos(a) * hl * 0.6, y2 - Math.sin(a) * hl * 0.6); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(x2 - hl * Math.cos(a - 0.42), y2 - hl * Math.sin(a - 0.42)); ctx.lineTo(x2 - hl * Math.cos(a + 0.42), y2 - hl * Math.sin(a + 0.42)); ctx.closePath(); ctx.fill();
+    } else if (m.t === 'num') {
+      const r = Math.max(14, w * 0.03), cx = X(m.x1), cy = Y(m.y1);
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fillStyle = col; ctx.fill();
+      ctx.lineWidth = Math.max(2, lw * 0.6); ctx.strokeStyle = (m.c === 'branco' || m.c === 'amarelo') ? '#111' : '#fff'; ctx.stroke();
+      ctx.fillStyle = (m.c === 'branco' || m.c === 'amarelo') ? '#111' : '#fff'; ctx.font = `700 ${Math.round(r * 1.15)}px Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(m.n), cx, cy + r * 0.05); ctx.textAlign = 'left';
+    }
+  }
+}
+async function bmpOf(blob) { try { return await createImageBitmap(blob); } catch { return await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = URL.createObjectURL(blob); }); } }
+function editarMarcas(f) {
+  return new Promise(async resolve => {
+    const base = f.base || f.blob, bmp = await bmpOf(base), W = bmp.width, H = bmp.height;
+    let marks = JSON.parse(JSON.stringify(f.marks || [])), tool = 'arr', cor = 'vermelho', drag = null;
+    const ov = document.createElement('div'); ov.className = 'editor';
+    ov.innerHTML = `<div class="ed-top"><button class="btn ghost sm" id="edx">Cancelar</button><b>Marcar foto</b><button class="btn sm" id="edok">Concluir</button></div>
+      <div class="ed-stage"><canvas id="edc"></canvas></div>
+      <div class="ed-bar">
+        <div class="ed-row" id="edt">
+          <button data-t="arr" class="on">➚<span>Seta</span></button><button data-t="rect">▭<span>Retângulo</span></button><button data-t="ell">◯<span>Círculo</span></button><button data-t="num">①<span>Número</span></button>
+        </div>
+        <div class="ed-row" id="edcor">${Object.keys(MCOR).map(k => `<i data-c="${k}" class="${k === cor ? 'on' : ''}" style="background:${MCOR[k]}"></i>`).join('')}
+          <button id="edun" class="sm2">↶ Desfazer</button><button id="edcl" class="sm2">🗑 Limpar</button></div>
+        <div class="ed-hint" id="edh"></div>
+      </div>`;
+    document.body.appendChild(ov);
+    const cv = ov.querySelector('#edc'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d');
+    const nextN = () => marks.filter(m => m.t === 'num').reduce((a, m) => Math.max(a, m.n), 0) + 1;
+    const hints = { arr: 'Arraste do início até o ponto que quer apontar.', rect: 'Arraste para desenhar um retângulo.', ell: 'Arraste para desenhar um círculo/elipse.', num: 'Toque na foto para colocar o próximo número. Descreva cada número depois, na legenda.' };
+    const redraw = () => { ctx.clearRect(0, 0, W, H); ctx.drawImage(bmp, 0, 0, W, H); desenharMarcas(ctx, W, H, drag ? [...marks, drag] : marks); ov.querySelector('#edh').textContent = (hints[tool] || '') + (marks.length ? '' : ''); };
+    const pt = e => { const r = cv.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }; };
+    cv.style.touchAction = 'none';
+    cv.onpointerdown = e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); const p = pt(e);
+      if (tool === 'num') { marks.push({ t: 'num', n: nextN(), x1: p.x, y1: p.y, c: cor }); redraw(); return; }
+      drag = { t: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, c: cor }; redraw(); };
+    cv.onpointermove = e => { if (!drag) return; const p = pt(e); drag.x2 = p.x; drag.y2 = p.y; redraw(); };
+    const fim = e => { if (!drag) return; const d = drag; drag = null; if (Math.hypot((d.x2 - d.x1) * W, (d.y2 - d.y1) * H) > W * 0.015) marks.push(d); redraw(); };
+    cv.onpointerup = fim; cv.onpointercancel = () => { drag = null; redraw(); };
+    ov.querySelectorAll('#edt button').forEach(b => b.onclick = () => { tool = b.dataset.t; ov.querySelectorAll('#edt button').forEach(x => x.classList.toggle('on', x === b)); redraw(); });
+    ov.querySelectorAll('#edcor i').forEach(i => i.onclick = () => { cor = i.dataset.c; ov.querySelectorAll('#edcor i').forEach(x => x.classList.toggle('on', x === i)); });
+    ov.querySelector('#edun').onclick = () => { marks.pop(); redraw(); };
+    ov.querySelector('#edcl').onclick = () => { marks = []; redraw(); };
+    const sair = v => { ov.remove(); resolve(v); };
+    ov.querySelector('#edx').onclick = () => sair(false);
+    ov.querySelector('#edok').onclick = async () => {
+      const fresh = await DB.get('fotos', f.id) || f;
+      if (!marks.length) { if (fresh.base) { fresh.blob = fresh.base; delete fresh.base; } delete fresh.marks; fresh.notas = []; }
+      else {
+        if (!fresh.base) fresh.base = fresh.blob;
+        const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, W, H); desenharMarcas(x, W, H, marks);
+        fresh.blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', 0.86)); fresh.marks = marks;
+        const used = new Set(marks.filter(m => m.t === 'num').map(m => m.n)); fresh.notas = (fresh.notas || []).filter(n => used.has(n.n));
+      }
+      await DB.put('fotos', fresh); Object.assign(f, fresh); if (urls[f.id]) { URL.revokeObjectURL(urls[f.id]); delete urls[f.id]; }
+      const v = await DB.get('vistorias', f.vistoriaId); if (v) await touchV(v); sair(true);
+    };
+    redraw();
+  });
 }
 
 /* ---------- rotas ---------- */
@@ -388,7 +468,7 @@ async function exportBackup(obraId) {
   for (const k of [new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1]) seqs[k] = await DB.getSetting('seq-' + k, 0);
   const parts = [`{"app":"all-vistorias","v":1,"exportadoEm":${Date.now()},"seqs":${JSON.stringify(seqs)},"obras":${JSON.stringify(obras)},"vistorias":${JSON.stringify(vs)},"emissoes":${JSON.stringify(ems)},"fotos":[`];
   let first = true;
-  for (const f of await DB.all('fotos')) { if (!vids.has(f.vistoriaId)) continue; const { blob, ...rest } = f; parts.push((first ? '' : ',') + JSON.stringify({ ...rest, data: await blobToData(blob) })); first = false; }
+  for (const f of await DB.all('fotos')) { if (!vids.has(f.vistoriaId)) continue; const { blob, base, ...rest } = f; parts.push((first ? '' : ',') + JSON.stringify({ ...rest, data: await blobToData(blob), baseData: base ? await blobToData(base) : undefined })); first = false; }
   parts.push(']}');
   baixar(new Blob(parts, { type: 'application/json' }), `ALL-Vistorias_backup_${obraId ? 'obra_' : ''}${hoje()}.json`);
 }
@@ -399,7 +479,7 @@ $('#impIn').addEventListener('change', async e => {
     for (const o of d.obras) await DB.put('obras', o);
     for (const v of d.vistorias) { const cur = await DB.get('vistorias', v.id); if (!cur || (cur.updatedAt || 0) <= (v.updatedAt || 0)) await DB.put('vistorias', v); }
     for (const x of d.emissoes) await DB.put('emissoes', x);
-    for (const f of d.fotos) { const { data, ...rest } = f; await DB.put('fotos', { ...rest, blob: await (await fetch(data)).blob() }); }
+    for (const f of d.fotos) { const { data, baseData, ...rest } = f; const o = { ...rest, blob: await (await fetch(data)).blob() }; if (baseData) o.base = await (await fetch(baseData)).blob(); await DB.put('fotos', o); }
     for (const [ano, n] of Object.entries(d.seqs || {})) { const cur = await DB.getSetting('seq-' + ano, 0); if (n > cur) await DB.setSetting('seq-' + ano, n); }
     toast(`Importado: ${d.obras.length} obra(s), ${d.vistorias.length} vistoria(s), ${d.fotos.length} foto(s)`, 4500); route();
   } catch (err) { toast('Falha ao importar: ' + err.message, 5000); }

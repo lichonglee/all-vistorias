@@ -8,6 +8,7 @@ const Rep = (() => {
   const fTs = t => { const d = new Date(t); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   const fLoc = f => (f.lat == null ? 'Localização não disponível' :
     `Lat ${f.lat.toFixed(6)} / Lon ${f.lon.toFixed(6)}${f.acc ? ' (±' + Math.round(f.acc) + ' m)' : ''}`);
+  const descF = f => (f.descricao || 'Sem descrição') + ((f.notas||[]).filter(n=>n.txt).length ? '  |  ' + f.notas.filter(n=>n.txt).map(n=>`(${n.n}) ${n.txt}`).join('; ') : '');
   const legenda = f => `${fTs(f.ts)} · ${fLoc(f)}`;
   const nn = n => pad(n);
 
@@ -55,7 +56,7 @@ const Rep = (() => {
       if (c.descricao) B.push({ t: 'p', label: 'Descrição: ', text: c.descricao });
       if (c.recomendacao) B.push({ t: 'p', label: 'Recomendação: ', text: c.recomendacao });
       const ph = (c.fotoIds || []).map(id => fotos.find(f => f.id === id)).filter(Boolean);
-      if (ph.length) B.push({ t: 'grid', items: ph.map(f => ({ f, cap1: `Foto ${nn(idx[f.id])} – ${f.descricao || 'Sem descrição'}`, cap2: legenda(f) })) });
+      if (ph.length) B.push({ t: 'grid', items: ph.map(f => ({ f, cap1: `Foto ${nn(idx[f.id])} – ${descF(f)}`, cap2: legenda(f) })) });
     });
     if (C.length) {
       B.push({ t: 'h1', text: '6. QUADRO-RESUMO DAS CONSTATAÇÕES' });
@@ -72,7 +73,7 @@ const Rep = (() => {
       B.push({ t: 'pagebreak' });
       B.push({ t: 'h1', text: `${C.length ? 9 : 8}. REGISTRO FOTOGRÁFICO` });
       B.push({ t: 'p', text: 'As fotografias a seguir foram registradas in loco por meio de aplicativo próprio, que associa a cada imagem a data, a hora e as coordenadas geográficas do aparelho no instante do registro.', small: true });
-      if (fotos.length) B.push({ t: 'photos', mh: 7.6, items: fotos.map((f, i) => ({ f, cap1: `Foto ${nn(i + 1)} – ${f.descricao || 'Sem descrição'}`, cap2: legenda(f) })) });
+      if (fotos.length) B.push({ t: 'photos', mh: 7.6, items: fotos.map((f, i) => ({ f, cap1: `Foto ${nn(i + 1)} – ${descF(f)}`, cap2: legenda(f) })) });
       else B.push({ t: 'p', text: 'Nenhuma foto registrada.' });
     } else {
       B.push({ t: 'p', text: `O registro fotográfico completo desta vistoria (${fotos.length} foto${fotos.length === 1 ? '' : 's'}) encontra-se no Memorial Fotográfico associado.`, small: true });
@@ -94,7 +95,7 @@ const Rep = (() => {
       ['Responsável técnico', [S.rt.nome, S.rt.titulo, S.rt.crea && 'CREA ' + S.rt.crea].filter(Boolean).join(' · ') || '—'],
     ] });
     B.push({ t: 'p', text: 'As fotografias a seguir foram registradas in loco por meio de aplicativo próprio, que associa a cada imagem a data, a hora e as coordenadas geográficas do aparelho no instante do registro.', small: true });
-    B.push({ t: 'photos', items: fotos.map((f, i) => ({ f, cap1: `Foto ${nn(i + 1)} – ${f.descricao || 'Sem descrição'}`, cap2: legenda(f) })) });
+    B.push({ t: 'photos', items: fotos.map((f, i) => ({ f, cap1: `Foto ${nn(i + 1)} – ${descF(f)}`, cap2: legenda(f) })) });
     B.push({ t: 'sign', city: 'Brasília-DF', data: fData(v.data), rt: S.rt });
     return { blocks: B, meta };
   }

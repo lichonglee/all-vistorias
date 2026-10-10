@@ -87,3 +87,20 @@ input[type=checkbox]{min-height:0}
 .sw input{width:28px;height:28px}
 table{font-size:15px}th{font-size:13px}
 .toast{font-size:16px}
+
+/* ---- Editor de marcações ---- */
+.editor{position:fixed;inset:0;z-index:80;background:#10141f;display:flex;flex-direction:column;color:#fff}
+.ed-top{display:flex;align-items:center;justify-content:space-between;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:var(--c)}
+.ed-top .btn.ghost{color:#fff;border-color:#ffffff55}
+.ed-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:8px}
+.ed-stage canvas{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;background:#000}
+.ed-bar{background:var(--c);padding:10px 10px calc(12px + env(safe-area-inset-bottom))}
+.ed-row{display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;flex-wrap:wrap}
+.ed-row button{appearance:none;border:2px solid #ffffff33;background:#ffffff14;color:#fff;border-radius:14px;min-width:76px;min-height:64px;font:600 30px/1 inherit;font-family:inherit;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.ed-row button span{font-size:13px;font-weight:600}
+.ed-row button.on{background:var(--a);border-color:#fff}
+.ed-row button.sm2{min-height:50px;min-width:0;padding:0 14px;font-size:16px;flex-direction:row}
+.ed-row i{width:44px;height:44px;border-radius:50%;border:3px solid #ffffff66;display:block}
+.ed-row i.on{border-color:#fff;box-shadow:0 0 0 3px var(--a)}
+.ed-hint{text-align:center;font-size:14px;color:#cdd7ee;min-height:20px}
+.numb{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:#E02020;color:#fff;flex:none}
