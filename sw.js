@@ -1,5 +1,5 @@
 /* Service worker: guarda o aplicativo no aparelho para funcionar sem internet. */
-const CACHE = 'all-vistorias-v4';
+const CACHE = 'all-vistorias-v5';
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'db.js', 'report.js', 'manifest.webmanifest',
   'vendor/docx.iife.js', 'vendor/pdf-lib.min.js', 'assets/logo.png', 'assets/icon-180.png', 'assets/icon-192.png', 'assets/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
