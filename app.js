@@ -200,7 +200,18 @@ function editarMarcas(f) {
       if (!marks.length) { if (fresh.base) { fresh.blob = fresh.base; delete fresh.base; } delete fresh.marks; fresh.notas = []; }
       else {
         if (!fresh.base) fresh.base = fresh.blob;
-        const c = document.createElement('canvas'/* ---------- recorte ou redução para meia folha ---------- */
+        const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, W, H); desenharMarcas(x, W, H, marks);
+        fresh.blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', 0.86)); fresh.marks = marks;
+        const used = new Set(marks.filter(m => m.t === 'num').map(m => m.n)); fresh.notas = (fresh.notas || []).filter(n => used.has(n.n));
+      }
+      await DB.put('fotos', fresh); Object.assign(f, fresh); if (urls[f.id]) { URL.revokeObjectURL(urls[f.id]); delete urls[f.id]; }
+      const v = await DB.get('vistorias', f.vistoriaId); if (v) await touchV(v); sair(true);
+    };
+    redraw();
+  });
+}
+
+/* ---------- recorte ou redução para meia folha ---------- */
 const RECORTES = { memorial: ['Meia folha – Memorial fotográfico (15,5 × 8,8 cm)', 15.5 / 8.8], dupla: ['Lado a lado – Relatório consolidado (7,9 × 5,9 cm)', 7.9 / 5.9] };
 function recortarFoto(f, modo = 'crop') {
   return new Promise(async resolve => {
@@ -270,17 +281,6 @@ async function desfazerRecorte(f) {
   if (urls[f.id]) { URL.revokeObjectURL(urls[f.id]); delete urls[f.id]; }
   const v = await DB.get('vistorias', f.vistoriaId); if (v) await touchV(v);
   return true;
-}
-
-    const o = c.getContext('2d'); o.drawImage(bmp, x, y, cw, ch, 0, 0, ow, oh); if (lines) await drawStamp(o, ow, oh, lines);
-      const fresh = await DB.get('fotos', f.id) || f;
-      fresh.blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', 0.86)); fresh.w = ow; fresh.h = oh; fresh.cortada = true;
-      delete fresh.base; delete fresh.marks; fresh.notas = [];
-      await DB.put('fotos', fresh); Object.assign(f, fresh); if (urls[f.id]) { URL.revokeObjectURL(urls[f.id]); delete urls[f.id]; }
-      const v = await DB.get('vistorias', f.vistoriaId); if (v) await touchV(v); sair(true);
-    };
-    redraw();
-  });
 }
 
 /* ---------- rotas ---------- */
