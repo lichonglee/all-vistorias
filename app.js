@@ -418,7 +418,7 @@ async function vVistoria(view, id) {
   }
   if (tab === 'const') {
     const C = v.constatacoes || [];
-    tb.innerHTML = `<button class="btn block" id="nc">+ Nova constatação</button><p class="mut small">Registre cada achado com sua gravidade, recomendação e as fotos que o comprovam.</p>
+    tb.innerHTML = `<button class="btn block" id="nc">+ Nova constatação</button><p class="mut small">Registre cada achado com tipo, ambiente, gravidade, recomendação e as fotos que o comprovam. Escolha o tipo no catálogo por grupo e use o ambiente para classificar a área. O título é sugerido pelo tipo e pode ser editado; informe em Local / elemento o ponto específico, como Pilar P12 – 2º pavimento.</p>
       ${C.map((c, i) => `<div class="card tap" data-c="${c.id}"><div class="row sp"><b>${pad(i + 1)}. ${esc(c.titulo || 'Sem título')}</b><span class="chip ${gravCls(c.gravidade)}">${esc(c.gravidade || '—')}</span></div><div class="mut small">${esc([c.ambiente, c.local].filter(Boolean).join(' · '))}${(c.fotoIds || []).length ? ' · ' + c.fotoIds.length + ' foto(s)' : ''}</div></div>`).join('') || '<div class="empty">Nenhuma constatação.</div>'}`;
     $('#nc').onclick = () => constSheet(v, fotos);
     tb.querySelectorAll('[data-c]').forEach(e => e.onclick = () => constSheet(v, fotos, v.constatacoes.find(c => c.id === e.dataset.c)));
