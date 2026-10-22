@@ -32,6 +32,6 @@ Cada aparelho guarda seus próprios dados. Para consolidar: em **Ajustes → Exp
 - O PIN do painel é uma barreira simples, não criptografia.
 - Fotos importadas da galeria usam a data do arquivo e ficam sem GPS.
 
-## Manual ilustrado
+## Versão 1.0.6 — 22/10/2026\n\nInclui o catálogo de tipos de constatação e ambientes, preserva tipo e ambiente nos relatórios, adiciona o manual ilustrado e melhora os ajustes de fotos.\n\n## Manual ilustrado
 
 Consulte o [manual do usuário](manual.html) para ver o fluxo completo do ALL Vistorias, incluindo ajustes, obras, fotos, recorte, redução, desfazer ajustes, emissão de relatórios e backups. As telas ilustradas usam dados fictícios.
