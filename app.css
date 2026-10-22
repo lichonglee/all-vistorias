@@ -5,6 +5,7 @@ body{padding-top:calc(56px + env(safe-area-inset-top));padding-bottom:calc(72px 
 .top{position:fixed;top:0;left:0;right:0;z-index:20;height:calc(56px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;background:var(--b);color:#fff;display:flex;align-items:center;gap:10px}
 .top .logo{height:30px;background:#fff;border-radius:6px;padding:3px 6px}
 .top h1{font-size:17px;margin:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.app-version{font-size:10px;font-weight:500;line-height:1.25;white-space:nowrap;opacity:.82;text-align:right}
 .icon{background:none;border:0;color:#fff;font-size:34px;line-height:1;padding:0 6px 4px;cursor:pointer}
 main{max-width:980px;margin:0 auto;padding:14px}
 .tabbar{position:fixed;bottom:0;left:0;right:0;z-index:20;display:flex;background:#fff;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
