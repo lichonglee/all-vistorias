@@ -226,7 +226,7 @@ function recortarFoto(f, modo = 'crop') {
       <div class="ed-bar">
         <select id="rcr" style="width:100%;margin-bottom:8px">${Object.entries(RECORTES).map(([k, v]) => '<option value="' + k + '">' + v[0] + '</option>').join('')}</select>
         <div class="ed-row" style="flex-wrap:nowrap"><span style="font-size:14px">${encaixar ? 'Ajuste' : 'Zoom'}</span><input id="rcz" type="range" min="30" max="100" value="100" style="flex:1" ${encaixar ? 'disabled' : ''}></div>
-        <div class="ed-hint">${encaixar ? 'A foto inteira será reduzida e centralizada no formato escolhido.' : 'Arraste o quadro para escolher o trecho. A foto ocupa a meia folha, em pé ou deitada.'}</div>
+        <div class="ed-hint">${encaixar ? 'A foto inteira será reduzida e centralizada no formato escolhido.' : 'Arraste o quadro para escolher o trecho e puxe o canto inferior direito para ajustar o tamanho. Você pode reposicionar e redimensionar antes de aplicar.'}</div>
       </div>`;
     document.body.appendChild(ov);
     const cv = ov.querySelector('#rcc'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); cv.style.touchAction = 'none';
@@ -240,10 +240,10 @@ function recortarFoto(f, modo = 'crop') {
       }
       ctx.fillStyle = 'rgba(0,0,0,.62)';
       ctx.fillRect(0, 0, W, y); ctx.fillRect(0, y + ch, W, H - y - ch); ctx.fillRect(0, y, x, ch); ctx.fillRect(x + cw, y, W - x - cw, ch);
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(3, W / 250); ctx.strokeRect(x, y, cw, ch); };
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(3, W / 250); ctx.strokeRect(x, y, cw, ch); if (!encaixar) { const hs = Math.max(24, W / 28); ctx.fillStyle = '#fff'; ctx.fillRect(x + cw - hs, y + ch - hs, hs, hs); ctx.strokeStyle = '#333'; ctx.lineWidth = Math.max(2, W / 500); ctx.strokeRect(x + cw - hs, y + ch - hs, hs, hs); } };
     const pt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; };
-    cv.onpointerdown = e => { if (encaixar) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); const p = pt(e); drag = { dx: p.x - x, dy: p.y - y }; };
-    cv.onpointermove = e => { if (!drag) return; const p = pt(e); x = p.x - drag.dx; y = p.y - drag.dy; redraw(); };
+    cv.onpointerdown = e => { if (encaixar) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); const p = pt(e), ch0 = cw / ratio, h = Math.max(28, W / 32); const resize = p.x >= x + cw - h && p.y >= y + ch0 - h; drag = resize ? { resize: true, sx: p.x, sy: p.y, cw, ch: ch0, x, y } : { dx: p.x - x, dy: p.y - y }; };
+    cv.onpointermove = e => { if (!drag) return; const p = pt(e); if (drag.resize) { const max = Math.min(W - drag.x, (HU - drag.y) * ratio); cw = Math.max(Math.min(W, HU * ratio) * .3, Math.min(max, drag.cw + ((p.x - drag.sx) + (p.y - drag.sy) * ratio) / 2)); z = cw / Math.min(W, HU * ratio); x = drag.x; y = drag.y; ov.querySelector('#rcz').value = Math.round(z * 100); } else { x = p.x - drag.dx; y = p.y - drag.dy; } redraw(); };
     cv.onpointerup = cv.onpointercancel = () => { drag = null; };
     ov.querySelector('#rcz').oninput = e => { if (encaixar) return; const ch0 = cw / ratio, cx = x + cw / 2, cy = y + ch0 / 2; z = e.target.value / 100; const ch = Math.min(W, HU * ratio) * z / ratio; x = cx - Math.min(W, HU * ratio) * z / 2; y = cy - ch / 2; redraw(); };
     ov.querySelector('#rcr').onchange = e => { ratio = RECORTES[e.target.value][1]; centralizar(); redraw(); };
