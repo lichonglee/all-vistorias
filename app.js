@@ -212,14 +212,14 @@ function editarMarcas(f) {
 }
 
 /* ---------- recorte ou redução para meia folha ---------- */
-const RECORTES = { memorial: ['Meia folha – Memorial fotográfico (15,5 × 8,8 cm)', 15.5 / 8.8], dupla: ['Lado a lado – Relatório consolidado (7,9 × 5,9 cm)', 7.9 / 5.9] };
+const RECORTES = { memorial: ['Meia folha – Memorial fotográfico (15,5 × 8,8 cm)', 15.5 / 8.8], dupla: ['Lado a lado – Relatório consolidado (7,9 × 5,9 cm)', 7.9 / 5.9], custom: ['Personalizado – proporção livre', null] };
 function recortarFoto(f, modo = 'crop') {
   return new Promise(async resolve => {
     const encaixar = modo === 'fit';
     if ((f.marks || []).length && !await confirmar('Este ajuste remove as marcações desta foto (setas, formas, números). Continuar?')) return resolve(false);
     const src = f.cropBackup?.blob || f.base || f.blob, bmp = await bmpOf(src), W = bmp.width, H = bmp.height;
     const lines = f.stampLines || null, sb = lines ? stampBh(W, lines.length) : 0, HU = H - sb;
-    let ratio = RECORTES.memorial[1], z = 1, cw = 0, x = 0, y = 0, drag = null;
+    let ratio = RECORTES.memorial[1], z = 1, cw = 0, customH = 0, custom = false, x = 0, y = 0, drag = null;
     const ov = document.createElement('div'); ov.className = 'editor';
     ov.innerHTML = `<div class="ed-top"><button class="btn ghost sm" id="rcx">Cancelar</button><b>${encaixar ? 'Diminuir foto inteira' : 'Recortar foto'}</b><button class="btn sm" id="rcok">Aplicar</button></div>
       <div class="ed-stage"><canvas id="rcc"></canvas></div>
@@ -230,8 +230,8 @@ function recortarFoto(f, modo = 'crop') {
       </div>`;
     document.body.appendChild(ov);
     const cv = ov.querySelector('#rcc'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); cv.style.touchAction = 'none';
-    const geom = () => { const max = Math.min(W, HU * ratio); cw = max * z; const ch = cw / ratio; x = Math.min(Math.max(0, x), W - cw); y = Math.min(Math.max(0, y), HU - ch); return ch; };
-    const centralizar = () => { z = 1; cw = Math.min(W, HU * ratio); x = (W - cw) / 2; y = (HU - cw / ratio) / 2; };
+    const geom = () => { if (custom) { cw = Math.max(1, Math.min(cw, W)); customH = Math.max(1, Math.min(customH, HU)); ratio = cw / customH; } else { const max = Math.min(W, HU * ratio); cw = max * z; } const ch = custom ? customH : cw / ratio; x = Math.min(Math.max(0, x), W - cw); y = Math.min(Math.max(0, y), HU - ch); return ch; };
+    const centralizar = () => { z = 1; if (custom) { cw = W * .75; customH = HU * .75; ratio = cw / customH; } else cw = Math.min(W, HU * ratio); x = (W - cw) / 2; y = (HU - (custom ? customH : cw / ratio)) / 2; };
     const redraw = () => { const ch = geom(); ctx.drawImage(bmp, 0, 0, W, H);
       if (encaixar) {
         ctx.fillStyle = '#fff'; ctx.fillRect(x, y, cw, ch);
@@ -242,11 +242,11 @@ function recortarFoto(f, modo = 'crop') {
       ctx.fillRect(0, 0, W, y); ctx.fillRect(0, y + ch, W, H - y - ch); ctx.fillRect(0, y, x, ch); ctx.fillRect(x + cw, y, W - x - cw, ch);
       ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(3, W / 250); ctx.strokeRect(x, y, cw, ch); if (!encaixar) { const hs = Math.max(24, W / 28); ctx.fillStyle = '#fff'; ctx.fillRect(x + cw - hs, y + ch - hs, hs, hs); ctx.strokeStyle = '#333'; ctx.lineWidth = Math.max(2, W / 500); ctx.strokeRect(x + cw - hs, y + ch - hs, hs, hs); } };
     const pt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; };
-    cv.onpointerdown = e => { if (encaixar) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); const p = pt(e), ch0 = cw / ratio, h = Math.max(28, W / 32); const resize = p.x >= x + cw - h && p.y >= y + ch0 - h; drag = resize ? { resize: true, sx: p.x, sy: p.y, cw, ch: ch0, x, y } : { dx: p.x - x, dy: p.y - y }; };
-    cv.onpointermove = e => { if (!drag) return; const p = pt(e); if (drag.resize) { const max = Math.min(W - drag.x, (HU - drag.y) * ratio); cw = Math.max(Math.min(W, HU * ratio) * .3, Math.min(max, drag.cw + ((p.x - drag.sx) + (p.y - drag.sy) * ratio) / 2)); z = cw / Math.min(W, HU * ratio); x = drag.x; y = drag.y; ov.querySelector('#rcz').value = Math.round(z * 100); } else { x = p.x - drag.dx; y = p.y - drag.dy; } redraw(); };
+    cv.onpointerdown = e => { if (encaixar) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); const p = pt(e), ch0 = custom ? customH : cw / ratio, h = Math.max(28, W / 32); const resize = p.x >= x + cw - h && p.y >= y + ch0 - h; drag = resize ? { resize: true, sx: p.x, sy: p.y, cw, ch: ch0, x, y } : { dx: p.x - x, dy: p.y - y }; };
+    cv.onpointermove = e => { if (!drag) return; const p = pt(e); if (drag.resize) { const nw = Math.max(W * .15, Math.min(W - drag.x, drag.cw + (p.x - drag.sx))); const nh = Math.max(HU * .15, Math.min(HU - drag.y, drag.ch + (p.y - drag.sy))); if (custom) { cw = nw; customH = nh; ratio = cw / customH; } else { const max = Math.min(W - drag.x, (HU - drag.y) * ratio); cw = Math.max(Math.min(W, HU * ratio) * .3, Math.min(max, drag.cw + ((p.x - drag.sx) + (p.y - drag.sy) * ratio) / 2)); } z = cw / Math.min(W, HU * ratio); x = drag.x; y = drag.y; ov.querySelector('#rcz').value = Math.round(z * 100); } else { x = p.x - drag.dx; y = p.y - drag.dy; } redraw(); };
     cv.onpointerup = cv.onpointercancel = () => { drag = null; };
     ov.querySelector('#rcz').oninput = e => { if (encaixar) return; const ch0 = cw / ratio, cx = x + cw / 2, cy = y + ch0 / 2; z = e.target.value / 100; const ch = Math.min(W, HU * ratio) * z / ratio; x = cx - Math.min(W, HU * ratio) * z / 2; y = cy - ch / 2; redraw(); };
-    ov.querySelector('#rcr').onchange = e => { ratio = RECORTES[e.target.value][1]; centralizar(); redraw(); };
+    ov.querySelector('#rcr').onchange = e => { custom = e.target.value === 'custom'; if (!custom) ratio = RECORTES[e.target.value][1]; centralizar(); redraw(); };
     const sair = v => { ov.remove(); resolve(v); };
     ov.querySelector('#rcx').onclick = () => sair(false);
     ov.querySelector('#rcok').onclick = async () => {
