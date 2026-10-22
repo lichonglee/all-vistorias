@@ -243,7 +243,7 @@ function recortarFoto(f, modo = 'crop') {
       ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(3, W / 250); ctx.strokeRect(x, y, cw, ch); if (!encaixar) { const hs = Math.max(24, W / 28); ctx.fillStyle = '#fff'; ctx.fillRect(x + cw - hs, y + ch - hs, hs, hs); ctx.strokeStyle = '#333'; ctx.lineWidth = Math.max(2, W / 500); ctx.strokeRect(x + cw - hs, y + ch - hs, hs, hs); } };
     const pt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; };
     cv.onpointerdown = e => { if (encaixar) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); const p = pt(e), ch0 = custom ? customH : cw / ratio, h = Math.max(28, W / 32); const resize = p.x >= x + cw - h && p.y >= y + ch0 - h; drag = resize ? { resize: true, sx: p.x, sy: p.y, cw, ch: ch0, x, y } : { dx: p.x - x, dy: p.y - y }; };
-    cv.onpointermove = e => { if (!drag) return; const p = pt(e); if (drag.resize) { const nw = Math.max(W * .15, Math.min(W - drag.x, drag.cw + (p.x - drag.sx))); const nh = Math.max(HU * .15, Math.min(HU - drag.y, drag.ch + (p.y - drag.sy))); if (custom) { cw = nw; customH = nh; ratio = cw / customH; } else { const max = Math.min(W - drag.x, (HU - drag.y) * ratio); cw = Math.max(Math.min(W, HU * ratio) * .3, Math.min(max, drag.cw + ((p.x - drag.sx) + (p.y - drag.sy) * ratio) / 2)); } z = cw / Math.min(W, HU * ratio); x = drag.x; y = drag.y; ov.querySelector('#rcz').value = Math.round(z * 100); } else { x = p.x - drag.dx; y = p.y - drag.dy; } redraw(); };
+    cv.onpointermove = e => { if (!drag) return; const p = pt(e); if (drag.resize) { const nw = Math.max(W * .15, Math.min(W - drag.x, drag.cw + (p.x - drag.sx))); const nh = Math.max(HU * .15, Math.min(HU - drag.y, drag.ch + (p.y - drag.sy))); if (custom) { cw = nw; customH = nh; ratio = cw / customH; } else { const max = Math.min(W - drag.x, (HU - drag.y) * ratio); const min = Math.min(max, Math.min(W, HU * ratio) * .3); cw = Math.max(min, Math.min(max, drag.cw + ((p.x - drag.sx) + (p.y - drag.sy) * ratio) / 2)); } z = cw / Math.min(W, HU * ratio); x = drag.x; y = drag.y; ov.querySelector('#rcz').value = Math.round(z * 100); } else { x = p.x - drag.dx; y = p.y - drag.dy; } redraw(); };
     cv.onpointerup = cv.onpointercancel = () => { drag = null; };
     ov.querySelector('#rcz').oninput = e => { if (encaixar) return; z = e.target.value / 100; if (custom) { cw = W * .75 * z; customH = HU * .75 * z; ratio = cw / customH; x = (W - cw) / 2; y = (HU - customH) / 2; } else { const ch0 = cw / ratio, cx = x + cw / 2, cy = y + ch0 / 2; const ch = Math.min(W, HU * ratio) * z / ratio; x = cx - Math.min(W, HU * ratio) * z / 2; y = cy - ch / 2; } redraw(); };
     ov.querySelector('#rcr').onchange = e => { custom = e.target.value === 'custom'; if (!custom) ratio = RECORTES[e.target.value][1]; centralizar(); redraw(); };
@@ -254,12 +254,13 @@ function recortarFoto(f, modo = 'crop') {
       const o = c.getContext('2d');
       if (encaixar) {
         o.fillStyle = '#fff'; o.fillRect(0, 0, ow, oh);
-        const sc = Math.min(ow / W, oh / HU), dw = W * sc, dh = HU * sc;
-        o.drawImage(bmp, 0, 0, W, HU, (ow - dw) / 2, (oh - dh) / 2, dw, dh);
+        const stampH = lines ? stampBh(ow, lines.length) : 0, photoH = Math.max(1, oh - stampH);
+        const sc = Math.min(ow / W, photoH / HU), dw = W * sc, dh = HU * sc;
+        o.drawImage(bmp, 0, 0, W, HU, (ow - dw) / 2, (photoH - dh) / 2, dw, dh);
       } else o.drawImage(bmp, x, y, cw, ch, 0, 0, ow, oh);
       if (lines) await drawStamp(o, ow, oh, lines);
       const fresh = await DB.get('fotos', f.id) || f;
-      if (!fresh.cropBackup) fresh.cropBackup = { blob: fresh.blob, base: fresh.base, marks: fresh.marks, notas: fresh.notas, w: fresh.w, h: fresh.h, cortada: fresh.cortada, ajustada: fresh.ajustada };
+      if (!fresh.cropBackup) fresh.cropBackup = { blob: fresh.blob, base: fresh.base, marks: fresh.marks, notas: fresh.notas, stampLines: fresh.stampLines, w: fresh.w, h: fresh.h, cortada: fresh.cortada, ajustada: fresh.ajustada };
       fresh.blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', 0.86)); fresh.w = ow; fresh.h = oh;
       if (encaixar) { fresh.ajustada = true; delete fresh.cortada; } else { fresh.cortada = true; delete fresh.ajustada; }
       delete fresh.base; delete fresh.marks; fresh.notas = [];
@@ -272,8 +273,10 @@ function recortarFoto(f, modo = 'crop') {
 async function desfazerRecorte(f) {
   const fresh = await DB.get('fotos', f.id) || f, backup = fresh.cropBackup;
   if (!backup) return false;
+  const newerAnnotations = (fresh.marks || []).length || (fresh.notas || []).some(n => String(n.txt || '').trim());
+  if (newerAnnotations && !await confirmar('Desfazer restaura as marcações e legendas originais. As marcações e legendas adicionadas após o ajuste serão substituídas. Continuar?')) return false;
   fresh.blob = backup.blob; fresh.w = backup.w; fresh.h = backup.h;
-  for (const k of ['base', 'marks', 'notas', 'cortada', 'ajustada']) {
+  for (const k of ['base', 'marks', 'notas', 'stampLines', 'cortada', 'ajustada']) {
     if (Object.prototype.hasOwnProperty.call(backup, k)) fresh[k] = backup[k]; else delete fresh[k];
   }
   delete fresh.cropBackup;
@@ -531,7 +534,7 @@ async function vAjustes(view) {
     <div class="card"><h3 style="margin-top:0">Backup e consolidação</h3><p class="mut small">Os dados ficam só neste aparelho. Exporte o backup para guardar ou para reunir vistorias de vários celulares: ao importar, os registros são <b>mesclados</b>, sem apagar os existentes.</p>
       <div class="row wrap"><button class="btn sec grow" id="ex">Exportar tudo (.json)</button><button class="btn sec grow" id="im">Importar backup</button></div><div class="mut small" id="stg" style="margin-top:8px"></div></div>
     <div class="card" id="inst"><h3 style="margin-top:0">Instalar no celular</h3><p class="small">Android (Chrome): menu ⋮ → <b>Instalar app</b>.<br>iPhone (Safari): <b>Compartilhar</b> → <b>Adicionar à Tela de Início</b>.</p><button class="btn sm" id="ib" hidden>Instalar agora</button></div>
-    <p class="mut small" style="text-align:center">ALL Vistorias v1.0 · funciona sem internet após o primeiro acesso</p>`;
+    <p class="mut small" style="text-align:center">ALL Vistorias v0.0.20 · 22/10/2026 · funciona sem internet após o primeiro acesso</p>`;
   bindFields(view, S, () => saveSettings());
   $('#sp').onclick = async () => { const p = $('#pin1').value; if (!/^\d{4,12}$/.test(p)) return toast('Use de 4 a 12 dígitos'); S.pinHash = await sha(p); sessionStorage.setItem('all-adm', S.pinHash); await saveSettings(); toast('PIN definido'); route(); };
   const rp = $('#rp'); if (rp) rp.onclick = async () => { S.pinHash = ''; await saveSettings(); route(); };

@@ -31,3 +31,7 @@ Cada aparelho guarda seus próprios dados. Para consolidar: em **Ajustes → Exp
 - A numeração é por aparelho; ao consolidar vários celulares, números podem coincidir. Se isso for um problema, o ideal é uma emissão centralizada pelo administrador ou a futura ligação a um banco em nuvem.
 - O PIN do painel é uma barreira simples, não criptografia.
 - Fotos importadas da galeria usam a data do arquivo e ficam sem GPS.
+
+## Manual ilustrado
+
+Consulte o [manual do usuário](manual.html) para ver o fluxo completo do ALL Vistorias, incluindo ajustes, obras, fotos, recorte, redução, desfazer ajustes, emissão de relatórios e backups. As telas ilustradas usam dados fictícios.
